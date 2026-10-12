@@ -3,6 +3,9 @@ import { CROP_BY_ID, stageOf } from "./crops";
 import { Cell, Port, SHIP_ARRIVE, SHIP_CYCLE, SHIP_DEPART, SHIP_DOCKED, SHIP_GONE, growth } from "./state";
 import { STRUCTURES } from "./structures";
 
+import { isViking, themeContext } from "./theme";
+import { drawLongship } from "./viking";
+
 export const C = 64; // pixels du monde par case
 
 // ---------- cases et cultures ----------
@@ -304,6 +307,659 @@ function apiaryBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
   }
 }
 
+// Une parcelle de culture : terre labourée, ou plants à leur stade de croissance (p de 0 à 1 ; moins de 0 : vide), avec sa barre d'avancement
+// et une goutte quand elle a soif (wet : humidité de 0 à 1).
+function drawPlot(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, crop: string, p: number, wet: number, t: number, target = "wheat") {
+  const planted = p >= 0;
+  const dry = planted && p < 1 && wet < 0.3;
+  g.fillStyle = !planted ? "#8a5c34" : dry ? "#b08f5e" : wet > 0 ? "#6e4527" : "#9a6f42"; // la terre mouillée est plus sombre
+  g.beginPath();
+  g.roundRect(x, y, w, h, 7);
+  g.fill();
+  g.strokeStyle = "#5e3c20";
+  g.lineWidth = 1.5;
+  g.stroke();
+  // sillons
+  g.strokeStyle = dry ? "rgba(90,60,30,0.35)" : "rgba(40,22,8,0.42)";
+  g.lineWidth = 2;
+  for (let i = 1; i < 4; i++) {
+    g.beginPath();
+    g.moveTo(x + 4, y + (i * (h - 10)) / 4 + 2);
+    g.lineTo(x + w - 4, y + (i * (h - 10)) / 4 + 2);
+    g.stroke();
+  }
+  if (!planted && !target) {
+    // vide et rien de prévu : un « + » pour dire qu'il faut choisir quoi y mettre
+    g.strokeStyle = "rgba(255,240,200,0.7)";
+    g.lineWidth = 3;
+    g.lineCap = "round";
+    g.beginPath();
+    g.moveTo(x + w / 2 - 8, y + h / 2);
+    g.lineTo(x + w / 2 + 8, y + h / 2);
+    g.moveTo(x + w / 2, y + h / 2 - 8);
+    g.lineTo(x + w / 2, y + h / 2 + 8);
+    g.stroke();
+    return;
+  }
+  if (!planted) {
+    // vide : trois graines de la culture prévue pour cette parcelle
+    g.fillStyle = { wheat: "#e8c24e", corn: "#f2d03a", tomato: "#d93b2b", carrot: "#f08a24", grass: "#5fbf4a" }[target as "wheat"] ?? "#e8c24e";
+    g.globalAlpha = 0.75;
+    for (let i = 0; i < 3; i++) {
+      g.beginPath();
+      g.ellipse(x + w / 2 - 12 + i * 12, y + h / 2, 3.2, 4.4, 0.5, 0, Math.PI * 2);
+      g.fill();
+    }
+    g.globalAlpha = 1;
+    return;
+  }
+  const k = Math.min(1, p); // avancement
+  const ripe = p >= 1;
+  const cols = 6;
+  const top = y + 8;
+  const area = h - 20; // le bas de la parcelle est réservé à la barre d'avancement
+  for (let row = 0; row < 3; row++) {
+    for (let c = 0; c < cols; c++) {
+      const px = x + 8 + (c * (w - 16)) / (cols - 1);
+      const py = top + 4 + row * (area / 3);
+      const sway = ripe ? Math.sin(t / 500 + c + row) * 1.2 : 0;
+      const droop = dry ? 2 : 0; // une plante assoiffée s'affaisse
+      if (crop === "wheat") {
+        g.strokeStyle = ripe ? "#e2b94a" : dry ? "#b3a95a" : k > 0.5 ? "#a8c050" : "#6fb04a";
+        g.lineWidth = 2;
+        g.beginPath();
+        g.moveTo(px, py + 5);
+        g.lineTo(px + sway + droop, py + 5 - 3 - k * 9 + droop);
+        g.stroke();
+        if (k > 0.5) {
+          g.fillStyle = ripe ? "#f0cd5a" : "#b9c660";
+          g.beginPath();
+          g.ellipse(px + sway + droop, py - 3 - k * 6 + droop, 1.8, 3.4, 0, 0, Math.PI * 2);
+          g.fill();
+        }
+      } else if (crop === "corn") {
+        g.strokeStyle = dry ? "#7f9a4e" : "#4e9a3e";
+        g.lineWidth = 2.4;
+        g.beginPath();
+        g.moveTo(px, py + 5);
+        g.lineTo(px + sway + droop, py + 4 - k * 11 + droop);
+        g.stroke();
+        if (k > 0.55) {
+          g.fillStyle = ripe ? "#f2d03a" : "#b8cc5a";
+          g.beginPath();
+          g.ellipse(px + 3 + sway, py + 1 - k * 5 + droop, 2, 4, 0.3, 0, Math.PI * 2);
+          g.fill();
+        }
+      } else if (crop === "grass") {
+        // de l'herbe drue : trois brins qui se couchent au vent
+        g.strokeStyle = dry ? "#9aa856" : ripe ? "#4fae3a" : "#6cc24f";
+        g.lineWidth = 2;
+        for (let b = -1; b <= 1; b++) {
+          g.beginPath();
+          g.moveTo(px + b * 2, py + 5);
+          g.lineTo(px + b * 3 + sway + droop, py + 5 - 2 - k * 10 + droop);
+          g.stroke();
+        }
+      } else if (crop === "tomato") {
+        g.fillStyle = dry ? "#7f9a4e" : k > 0.3 ? "#3f8a35" : "#74b84f";
+        g.beginPath();
+        g.arc(px, py + 1 + droop / 2, 2.5 + k * 3, 0, Math.PI * 2);
+        g.fill();
+        if (k > 0.6) {
+          g.fillStyle = ripe ? "#d93b2b" : "#9cc052";
+          g.beginPath();
+          g.arc(px + 2, py + 3, 1.8 + k, 0, Math.PI * 2);
+          g.fill();
+        }
+      } else {
+        g.fillStyle = dry ? "#7f9a4e" : k > 0.3 ? "#4f9a3d" : "#7cbc5a";
+        g.beginPath();
+        g.ellipse(px, py + 1 + droop / 2, 2 + k * 2, 3 + k * 4 - droop, 0, 0, Math.PI * 2);
+        g.fill();
+        if (ripe) {
+          g.fillStyle = "#f08a24";
+          g.beginPath();
+          g.arc(px, py + 5, 2.2, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
+    }
+  }
+  // barre d'avancement de la pousse (pleine et dorée quand c'est mûr)
+  g.fillStyle = "rgba(30,20,10,0.6)";
+  g.beginPath();
+  g.roundRect(x + 5, y + h - 10, w - 10, 6, 3);
+  g.fill();
+  g.fillStyle = ripe ? "#f2c230" : dry ? "#c9a24a" : "#8fd05a";
+  g.beginPath();
+  g.roundRect(x + 5, y + h - 10, Math.max(4, (w - 10) * k), 6, 3);
+  g.fill();
+  // une goutte quand la parcelle a soif
+  if (dry) {
+    const a = 0.75 + 0.25 * Math.sin(t / 160);
+    const cx = x + w - 11;
+    const cy = y + 12;
+    g.fillStyle = `rgba(47,150,240,${a})`;
+    g.beginPath();
+    g.moveTo(cx, cy - 8);
+    g.bezierCurveTo(cx + 2, cy - 4, cx + 6, cy - 1, cx + 6, cy + 2);
+    g.arc(cx, cy + 2, 6, 0, Math.PI, false);
+    g.bezierCurveTo(cx - 6, cy - 1, cx - 2, cy - 4, cx, cy - 8);
+    g.fill();
+    g.strokeStyle = `rgba(16,84,160,${a})`;
+    g.lineWidth = 1.5;
+    g.stroke();
+  }
+}
+
+// Ferme (5 × 5 cases) : douze parcelles (4 × 3), une grange rouge, une cuve d'eau (dont le niveau se voit) et une barrière.
+// plots : l'état des parcelles (à défaut, une ferme neuve) ; water : le niveau de la cuve (0 à 1).
+export function drawFarm(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, plots?: { c: string; t?: string | null; p: number; wet: number }[], t = 0, water = 0.5) {
+  rotated(g, gx, gy, 5, rot, () => farmBody(g, gx, gy, plots, t, water));
+}
+
+function farmBody(g: CanvasRenderingContext2D, gx: number, gy: number, plots: { c: string; t?: string | null; p: number; wet: number }[] | undefined, t: number, water: number) {
+  const x = gx * C;
+  const y = gy * C;
+  const w = 5 * C;
+  // seuil de l'entrée (la case d'entrée est juste en dessous, au milieu)
+  g.fillStyle = "#c9a96e";
+  g.beginPath();
+  g.roundRect(x + 2 * C + 8, y + w - 6, C - 16, 24, 8);
+  g.fill();
+  // enclos d'herbe tendre et clôture
+  g.fillStyle = "#a6cf70";
+  g.beginPath();
+  g.roundRect(x + 3, y + 3, w - 6, w - 6, 18);
+  g.fill();
+  g.strokeStyle = "#8a6a3c";
+  g.lineWidth = 4;
+  g.stroke();
+  // piquets de la clôture
+  g.fillStyle = "#6d4527";
+  for (let i = 0; i <= 10; i++) {
+    const pxp = x + 10 + (i * (w - 20)) / 10;
+    g.beginPath();
+    g.arc(pxp, y + 6, 2.6, 0, Math.PI * 2);
+    g.arc(pxp, y + w - 6, 2.6, 0, Math.PI * 2);
+    g.fill();
+  }
+  // allée de terre vers la porte
+  g.fillStyle = "#cdb78a";
+  g.fillRect(x + w / 2 - 22, y + 232, 44, w - 232);
+  // douze parcelles : quatre colonnes, trois rangées
+  for (let i = 0; i < 12; i++) {
+    const pl = plots?.[i];
+    const col = i % 4;
+    const row = Math.floor(i / 4);
+    drawPlot(g, x + 14 + col * 74, y + 14 + row * 72, 68, 66, pl?.c ?? "wheat", pl ? pl.p : i % 3 === 0 ? -1 : 0.45, pl ? pl.wet : 1, t, plots ? pl?.t ?? "" : "wheat");
+  }
+  // grange rouge en bas à gauche
+  const bx = x + 16;
+  const by = y + 238;
+  g.fillStyle = "rgba(40,30,10,0.26)";
+  g.fillRect(bx + 6, by + 7, 92, 62);
+  g.fillStyle = "#b8483a";
+  g.fillRect(bx, by, 92, 62);
+  g.fillStyle = "#963a2f";
+  g.fillRect(bx + 46, by, 46, 62);
+  g.strokeStyle = "#5e2a22";
+  g.lineWidth = 3;
+  g.strokeRect(bx, by, 92, 62);
+  g.fillStyle = "#f2e6d0";
+  g.fillRect(bx + 28, by + 28, 36, 34);
+  g.strokeStyle = "#5e2a22";
+  g.beginPath();
+  g.moveTo(bx + 28, by + 28);
+  g.lineTo(bx + 64, by + 62);
+  g.moveTo(bx + 64, by + 28);
+  g.lineTo(bx + 28, by + 62);
+  g.stroke();
+  // cuve d'eau en bas à droite : le niveau se voit
+  const cx = x + w - 54;
+  const cy = y + 270;
+  g.fillStyle = "rgba(40,30,10,0.28)";
+  g.beginPath();
+  g.arc(cx + 5, cy + 6, 34, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#8a5a2e";
+  g.beginPath();
+  g.arc(cx, cy, 34, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#1f5f9a";
+  g.beginPath();
+  g.arc(cx, cy, 27, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#4fa6ea";
+  g.beginPath();
+  g.arc(cx, cy, 4 + 23 * Math.max(0, Math.min(1, water)), 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = "#5e3c1a";
+  g.lineWidth = 3;
+  g.beginPath();
+  g.arc(cx, cy, 34, 0, Math.PI * 2);
+  g.stroke();
+  // botte de paille
+  g.fillStyle = "#e3c25a";
+  g.beginPath();
+  g.ellipse(x + 168, y + 276, 22, 15, 0, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = "#a8872e";
+  g.lineWidth = 2;
+  g.stroke();
+}
+
+// Une vache vue de dessus, tournée vers `dir` (1 : elle regarde à droite, -1 : à gauche), la tête baissée si elle broute.
+function drawCow(g: CanvasRenderingContext2D, x: number, y: number, dir: number, variant: number, graze: boolean, sad: boolean) {
+  g.save();
+  g.translate(x, y);
+  g.scale(dir, 1);
+  g.fillStyle = "rgba(30,20,10,0.25)";
+  g.beginPath();
+  g.ellipse(2, 8, 20, 9, 0, 0, Math.PI * 2);
+  g.fill();
+  // corps
+  g.fillStyle = variant % 2 ? "#f4efe6" : "#efe2cf";
+  g.beginPath();
+  g.ellipse(0, 0, 19, 11, 0, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = "#8a7d6a";
+  g.lineWidth = 1.5;
+  g.stroke();
+  // taches
+  g.fillStyle = variant % 3 === 0 ? "#2f2a26" : "#8a5a36";
+  g.beginPath();
+  g.ellipse(-6, -2, 6, 5, 0.4, 0, Math.PI * 2);
+  g.ellipse(5, 4, 5, 4, -0.3, 0, Math.PI * 2);
+  g.fill();
+  // queue
+  g.strokeStyle = "#8a7d6a";
+  g.lineWidth = 2;
+  g.beginPath();
+  g.moveTo(-18, 0);
+  g.lineTo(-24, graze ? 4 : -3);
+  g.stroke();
+  // tête
+  const hy = graze ? 5 : 0;
+  g.fillStyle = "#f6efe4";
+  g.beginPath();
+  g.ellipse(21, hy, 9, 7, 0, 0, Math.PI * 2);
+  g.fill();
+  g.stroke();
+  g.fillStyle = "#e9a9a0"; // museau
+  g.beginPath();
+  g.ellipse(27, hy, 4, 4, 0, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#2f2a26"; // œil et cornes
+  g.beginPath();
+  g.arc(21, hy - 3, 1.4, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#d9cfae";
+  g.fillRect(17, hy - 8, 3, 3);
+  g.fillRect(17, hy + 5, 3, 3);
+  if (sad) {
+    g.fillStyle = "#d33";
+    g.fillRect(-3, -3, 3, 3);
+  }
+  g.restore();
+}
+
+// Le marché (3 × 3 cases) : trois étals aux auvents rayés, des caisses, et un fanion quand la caravane est là.
+export function drawMarket(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, here = false, t = 0) {
+  rotated(g, gx, gy, 3, rot, () => {
+    const x = gx * C;
+    const y = gy * C;
+    const w = 3 * C;
+    g.fillStyle = "#c9b27a"; // place pavée
+    g.beginPath();
+    g.roundRect(x + 3, y + 3, w - 6, w - 6, 12);
+    g.fill();
+    g.strokeStyle = "#8a7340";
+    g.lineWidth = 3;
+    g.stroke();
+    g.fillStyle = "#cdb78a"; // allée vers l'entrée
+    g.fillRect(x + C + 6, y + 2 * C, C - 12, C);
+    const awn = ["#c0453a", "#2f7fb0", "#d8a431"];
+    for (let i = 0; i < 3; i++) {
+      const sx = x + 10 + i * 61;
+      const sy = y + 14;
+      g.fillStyle = "rgba(40,30,10,0.25)";
+      g.fillRect(sx + 4, sy + 6, 54, 62);
+      g.fillStyle = "#7a5230"; // comptoir
+      g.fillRect(sx, sy + 34, 54, 30);
+      g.fillStyle = ["#e08a3a", "#8ab04a", "#d9c07a"][i]; // marchandises
+      for (let k = 0; k < 4; k++) {
+        g.beginPath();
+        g.arc(sx + 9 + k * 12, sy + 48, 5, 0, Math.PI * 2);
+        g.fill();
+      }
+      for (let k = 0; k < 6; k++) { // auvent rayé
+        g.fillStyle = k % 2 ? "#f1e6c8" : awn[i];
+        g.fillRect(sx + k * 9, sy, 9, 32);
+      }
+      g.strokeStyle = "#4e3320";
+      g.lineWidth = 2;
+      g.strokeRect(sx, sy, 54, 64);
+    }
+    g.fillStyle = "#7a5230"; // caisses
+    g.fillRect(x + 14, y + 2 * C + 20, 22, 20);
+    g.fillRect(x + w - 40, y + 2 * C + 12, 24, 22);
+    g.strokeStyle = "#4e3320";
+    g.lineWidth = 2;
+    g.strokeRect(x + 14, y + 2 * C + 20, 22, 20);
+    g.strokeRect(x + w - 40, y + 2 * C + 12, 24, 22);
+    if (here) { // fanion de la caravane
+      const wave = Math.sin(t / 240) * 3;
+      g.strokeStyle = "#2a1a10";
+      g.lineWidth = 3;
+      g.beginPath();
+      g.moveTo(x + w - 12, y + 6);
+      g.lineTo(x + w - 12, y + 52);
+      g.stroke();
+      g.fillStyle = "#e8c24e";
+      g.beginPath();
+      g.moveTo(x + w - 12, y + 6);
+      g.lineTo(x + w - 38, y + 12 + wave);
+      g.lineTo(x + w - 12, y + 24);
+      g.closePath();
+      g.fill();
+    }
+  });
+}
+
+// La caravane : un chariot bâché tiré par un bœuf, vu de dessus, qui avance vers la droite. (cx, cy) est son centre en pixels du monde.
+export function drawCaravan(g: CanvasRenderingContext2D, cx: number, cy: number, t: number, moving: boolean) {
+  g.save();
+  g.translate(cx, cy);
+  const bob = moving ? Math.sin(t / 90) * 1.5 : 0;
+  g.fillStyle = "rgba(30,20,10,0.25)";
+  g.beginPath();
+  g.ellipse(4, 22, 70, 14, 0, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#3a2a1a"; // roues
+  g.fillRect(-52, -30 + bob, 20, 6);
+  g.fillRect(-52, 24 - bob, 20, 6);
+  g.fillRect(-12, -30 - bob, 20, 6);
+  g.fillRect(-12, 24 + bob, 20, 6);
+  g.fillStyle = "#7a5230"; // caisse
+  g.fillRect(-62, -26, 84, 52);
+  g.fillStyle = "#efe6cc"; // bâche
+  g.beginPath();
+  g.roundRect(-58, -22, 74, 44, 14);
+  g.fill();
+  g.strokeStyle = "#b9a878";
+  g.lineWidth = 2;
+  g.stroke();
+  for (let i = 1; i < 5; i++) {
+    g.beginPath();
+    g.moveTo(-58 + i * 15, -22);
+    g.lineTo(-58 + i * 15, 22);
+    g.stroke();
+  }
+  g.strokeStyle = "#5a3d1c"; // timon
+  g.lineWidth = 4;
+  g.beginPath();
+  g.moveTo(22, 0);
+  g.lineTo(52, 0);
+  g.stroke();
+  g.fillStyle = "#8a5a36"; // le bœuf
+  g.beginPath();
+  g.ellipse(70, 0, 20, 13, 0, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = "#4e3320";
+  g.lineWidth = 2;
+  g.stroke();
+  g.fillStyle = "#6e4426";
+  g.beginPath();
+  g.ellipse(90, 0 + bob * 0.5, 9, 8, 0, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#efe6cc"; // cornes
+  g.fillRect(88, -11, 4, 6);
+  g.fillRect(88, 5, 4, 6);
+  g.restore();
+}
+
+// Un cochon vu de dessus (rose, queue en tire-bouchon) ; un porcelet est plus petit.
+function drawPig(g: CanvasRenderingContext2D, x: number, y: number, dir: number, size: number, graze: boolean, sad: boolean) {
+  g.save();
+  g.translate(x, y);
+  g.scale(dir * size, size);
+  g.fillStyle = "rgba(30,20,10,0.25)";
+  g.beginPath();
+  g.ellipse(2, 8, 17, 8, 0, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#f0b6b0";
+  g.beginPath();
+  g.ellipse(0, 0, 16, 10, 0, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = "#a36a66";
+  g.lineWidth = 1.5;
+  g.stroke();
+  g.fillStyle = "#e79a96"; // flancs
+  g.beginPath();
+  g.ellipse(-3, 3, 8, 4, 0.1, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = "#c07872"; // queue
+  g.lineWidth = 2;
+  g.beginPath();
+  g.moveTo(-16, 0);
+  g.quadraticCurveTo(-21, -5, -18, -2);
+  g.quadraticCurveTo(-23, 2, -19, 3);
+  g.stroke();
+  const hy = graze ? 4 : 0;
+  g.fillStyle = "#f0b6b0"; // tête
+  g.beginPath();
+  g.ellipse(17, hy, 8, 7, 0, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = "#a36a66";
+  g.lineWidth = 1.5;
+  g.stroke();
+  g.fillStyle = "#e08a86"; // oreilles
+  g.beginPath();
+  g.ellipse(13, hy - 6, 3.5, 4.5, -0.4, 0, Math.PI * 2);
+  g.ellipse(13, hy + 6, 3.5, 4.5, 0.4, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#d8797a"; // groin
+  g.beginPath();
+  g.ellipse(24, hy, 3.6, 4.2, 0, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#6b3d3a";
+  g.fillRect(23, hy - 2, 1.5, 1.5);
+  g.fillRect(23, hy + 1, 1.5, 1.5);
+  g.fillStyle = "#2f2a26";
+  g.beginPath();
+  g.arc(18, hy - 3, 1.2, 0, Math.PI * 2);
+  g.fill();
+  if (sad) {
+    g.fillStyle = "#d33";
+    g.fillRect(-3, -3, 3, 3);
+  }
+  g.restore();
+}
+
+// Porcherie (4 × 4 cases) : un abri de bois au toit de chaume au nord, un enclos de boue où les cochons se promènent, une auge (légumes) et un abreuvoir (eau) dont les niveaux se voient.
+export function drawPigpen(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, pigs: { age: number; eat: number; drink: number }[] = [], t = 0, feed = 0.5, water = 0.5) {
+  rotated(g, gx, gy, 4, rot, () => pigpenBody(g, gx, gy, pigs, t, feed, water));
+}
+
+function pigpenBody(g: CanvasRenderingContext2D, gx: number, gy: number, pigs: { age: number; eat: number; drink: number }[], t: number, feed: number, water: number) {
+  const x = gx * C;
+  const y = gy * C;
+  const w = 4 * C;
+  g.fillStyle = "#c9a96e"; // seuil de l'entrée
+  g.beginPath();
+  g.roundRect(x + C + 8, y + w - 6, C - 16, 24, 8);
+  g.fill();
+  // enclos : terre battue et flaques de boue
+  g.fillStyle = "#a98b5a";
+  g.beginPath();
+  g.roundRect(x + 3, y + 3, w - 6, w - 6, 16);
+  g.fill();
+  g.strokeStyle = "#7a5a34";
+  g.lineWidth = 4;
+  g.stroke();
+  g.fillStyle = "#8a6a3e";
+  for (const [mx, my, rx, ry] of [[70, 150, 34, 16], [150, 200, 28, 13], [205, 140, 24, 12]]) {
+    g.beginPath();
+    g.ellipse(x + mx, y + my, rx, ry, 0.2, 0, Math.PI * 2);
+    g.fill();
+  }
+  g.fillStyle = "#6d4527";
+  for (let i = 0; i <= 8; i++) {
+    const pxp = x + 10 + (i * (w - 20)) / 8;
+    g.beginPath();
+    g.arc(pxp, y + 6, 2.6, 0, Math.PI * 2);
+    g.arc(pxp, y + w - 6, 2.6, 0, Math.PI * 2);
+    g.fill();
+  }
+  g.fillStyle = "#cdb78a"; // allée
+  g.fillRect(x + C + 6, y + 190, C - 12, w - 190);
+  // l'abri : toit de chaume
+  const bx = x + 14;
+  const by = y + 12;
+  const bw = w - 28;
+  const bh = 86;
+  g.fillStyle = "rgba(40,30,10,0.28)";
+  g.fillRect(bx + 8, by + 9, bw, bh);
+  g.fillStyle = "#c9a85a";
+  g.fillRect(bx, by, bw / 2, bh);
+  g.fillStyle = "#b08f45";
+  g.fillRect(bx + bw / 2, by, bw / 2, bh);
+  g.strokeStyle = "rgba(90,60,20,0.35)";
+  g.lineWidth = 1.2;
+  for (let i = 1; i < 12; i++) {
+    g.beginPath();
+    g.moveTo(bx, by + (i * bh) / 12);
+    g.lineTo(bx + bw, by + (i * bh) / 12);
+    g.stroke();
+  }
+  g.strokeStyle = "#5a3d1c";
+  g.lineWidth = 4;
+  g.beginPath();
+  g.moveTo(bx + bw / 2, by);
+  g.lineTo(bx + bw / 2, by + bh);
+  g.stroke();
+  g.lineWidth = 3;
+  g.strokeRect(bx, by, bw, bh);
+  g.fillStyle = "#2d1d14";
+  g.fillRect(bx + bw / 2 - 24, by + bh - 4, 48, 13);
+  // auge (légumes) et abreuvoir (eau) en bas à droite
+  const tx = x + w - 112;
+  const ty = y + w - 56;
+  g.fillStyle = "rgba(40,30,10,0.25)";
+  g.fillRect(tx + 4, ty + 5, 96, 40);
+  g.fillStyle = "#7a5230";
+  g.fillRect(tx, ty, 96, 40);
+  g.fillStyle = "#e08a3a"; // des légumes
+  g.fillRect(tx + 4, ty + 4, 40 * Math.max(0.08, Math.min(1, feed)), 32);
+  g.fillStyle = "#2f7fc0";
+  g.fillRect(tx + 52, ty + 4, 40 * Math.max(0.08, Math.min(1, water)), 32);
+  g.strokeStyle = "#4e3320";
+  g.lineWidth = 2.5;
+  g.strokeRect(tx, ty, 96, 40);
+  g.beginPath();
+  g.moveTo(tx + 48, ty);
+  g.lineTo(tx + 48, ty + 40);
+  g.stroke();
+  // les cochons : positions calculées à partir du temps ; les porcelets sont plus petits
+  pigs.forEach((p, i) => {
+    const phase = t / (1700 + i * 190) + i * 2.3;
+    const cx = x + 52 + (i % 4) * 54 + Math.sin(phase) * 15;
+    const cy = y + 134 + Math.floor(i / 4) * 46 + Math.cos(phase * 0.8 + i) * 7;
+    drawPig(g, cx, cy, Math.cos(phase) >= 0 ? 1 : -1, p.age >= 240 ? 1 : 0.65 + 0.35 * (p.age / 240), Math.sin(phase * 0.5 + i) > 0.5, p.eat > 90 || p.drink > 68);
+  });
+}
+
+// Étable (4 × 4 cases) : une grange au nord, un enclos clos de barrières où les vaches se promènent, une auge (herbe) et un abreuvoir (eau) dont les niveaux se voient.
+export function drawStable(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, cows: { eat: number; drink: number }[] = [], t = 0, feed = 0.5, water = 0.5) {
+  rotated(g, gx, gy, 4, rot, () => stableBody(g, gx, gy, cows, t, feed, water));
+}
+
+function stableBody(g: CanvasRenderingContext2D, gx: number, gy: number, cows: { eat: number; drink: number }[], t: number, feed: number, water: number) {
+  const x = gx * C;
+  const y = gy * C;
+  const w = 4 * C;
+  // seuil de l'entrée (la case d'entrée est juste en dessous, deuxième colonne)
+  g.fillStyle = "#c9a96e";
+  g.beginPath();
+  g.roundRect(x + C + 8, y + w - 6, C - 16, 24, 8);
+  g.fill();
+  // enclos : herbe rase et barrière
+  g.fillStyle = "#9fcc6a";
+  g.beginPath();
+  g.roundRect(x + 3, y + 3, w - 6, w - 6, 16);
+  g.fill();
+  g.strokeStyle = "#8a6a3c";
+  g.lineWidth = 4;
+  g.stroke();
+  g.fillStyle = "#6d4527";
+  for (let i = 0; i <= 8; i++) {
+    const pxp = x + 10 + (i * (w - 20)) / 8;
+    g.beginPath();
+    g.arc(pxp, y + 6, 2.6, 0, Math.PI * 2);
+    g.arc(pxp, y + w - 6, 2.6, 0, Math.PI * 2);
+    g.fill();
+  }
+  // allée vers la porte
+  g.fillStyle = "#cdb78a";
+  g.fillRect(x + C + 6, y + 190, C - 12, w - 190);
+  // la grange au nord
+  const bx = x + 14;
+  const by = y + 12;
+  const bw = w - 28;
+  const bh = 92;
+  g.fillStyle = "rgba(40,30,10,0.28)";
+  g.fillRect(bx + 8, by + 9, bw, bh);
+  g.fillStyle = "#a35a3a";
+  g.fillRect(bx, by, bw / 2, bh);
+  g.fillStyle = "#8a4a2e";
+  g.fillRect(bx + bw / 2, by, bw / 2, bh);
+  g.strokeStyle = "rgba(40,20,10,0.3)";
+  g.lineWidth = 1;
+  for (let i = 1; i < 9; i++) {
+    g.beginPath();
+    g.moveTo(bx, by + (i * bh) / 9);
+    g.lineTo(bx + bw, by + (i * bh) / 9);
+    g.stroke();
+  }
+  g.strokeStyle = "#4e2a1a";
+  g.lineWidth = 4;
+  g.beginPath();
+  g.moveTo(bx + bw / 2, by);
+  g.lineTo(bx + bw / 2, by + bh);
+  g.stroke();
+  g.lineWidth = 3;
+  g.strokeRect(bx, by, bw, bh);
+  // grande porte de la grange
+  g.fillStyle = "#2d1d14";
+  g.fillRect(bx + bw / 2 - 26, by + bh - 4, 52, 14);
+  // auge (herbe) et abreuvoir (eau) en bas à droite
+  const tx = x + w - 112;
+  const ty = y + w - 56;
+  g.fillStyle = "rgba(40,30,10,0.25)";
+  g.fillRect(tx + 4, ty + 5, 96, 40);
+  g.fillStyle = "#7a5230";
+  g.fillRect(tx, ty, 96, 40);
+  g.fillStyle = "#c9a64a"; // l'herbe sèche, selon le niveau
+  g.fillRect(tx + 4, ty + 4, 40 * Math.max(0.08, Math.min(1, feed)), 32);
+  g.fillStyle = "#2f7fc0"; // l'eau
+  g.fillRect(tx + 52, ty + 4, 40 * Math.max(0.08, Math.min(1, water)), 32);
+  g.strokeStyle = "#4e3320";
+  g.lineWidth = 2.5;
+  g.strokeRect(tx, ty, 96, 40);
+  g.beginPath();
+  g.moveTo(tx + 48, ty);
+  g.lineTo(tx + 48, ty + 40);
+  g.stroke();
+  // les vaches qui se promènent dans l'enclos (positions calculées à partir du temps : rien à sauvegarder)
+  cows.forEach((c, i) => {
+    const phase = t / (1900 + i * 230) + i * 2.1;
+    const cx = x + 56 + (i % 3) * 66 + Math.sin(phase) * 20;
+    const cy = y + 138 + Math.floor(i / 3) * 42 + Math.cos(phase * 0.7 + i) * 8;
+    drawCow(g, cx, cy, Math.cos(phase) >= 0 ? 1 : -1, i, Math.sin(phase * 0.4 + i) > 0.55, c.eat > 105 || c.drink > 75);
+  });
+}
+
 // Église (3 × 3 cases) : nef de pierre à toit d'ardoise en croix, clocher carré, et au sud un cimetière clos de murets où s'alignent les tombes.
 export function drawChurch(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, graves = 0) {
   rotated(g, gx, gy, 3, rot, () => churchBody(g, gx, gy, graves));
@@ -450,8 +1106,19 @@ export function drawCorpse(g: CanvasRenderingContext2D, x: number, y: number, co
 }
 
 // Maison du soigneur (2 × 2 cases) : petite maison blanche à toit vert, croix claire, jardin d'herbes médicinales.
-export function drawClinic(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0) {
+export function drawClinic(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, brewing = false, t = 0) {
   rotated(g, gx, gy, 2, rot, () => clinicBody(g, gx, gy));
+  if (!brewing) return;
+  // le soigneur prépare un remède à l'intérieur : de la vapeur verte monte du toit
+  const cx = (gx + 1) * C;
+  const cy = (gy + 0.55) * C;
+  for (let i = 0; i < 5; i++) {
+    const p = (t / 2200 + i / 5) % 1;
+    g.fillStyle = `rgba(150,215,150,${0.7 * (1 - p)})`;
+    g.beginPath();
+    g.arc(cx + Math.sin(p * 6 + i * 1.7) * 8, cy - p * 54, 6 + p * 11, 0, Math.PI * 2);
+    g.fill();
+  }
 }
 
 function clinicBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
@@ -631,6 +1298,11 @@ export function drawShip(g: CanvasRenderingContext2D, port: Port, time: number) 
   g.rotate(Math.atan2(dy, dx) + (heading > 0 ? Math.PI : 0));
   const L = C * 1.1;
   const W = C * 0.42;
+  if (isViking()) {
+    drawLongship(g, L * 1.15, W, time); // le drakkar
+    g.restore();
+    return;
+  }
   g.fillStyle = "rgba(10,40,70,0.3)";
   g.beginPath();
   g.ellipse(5, 6, L, W, 0, 0, Math.PI * 2);
@@ -1386,6 +2058,7 @@ export function drawRoadCell(g: CanvasRenderingContext2D, gx: number, gy: number
 // Vignette d'une structure dans la barre de construction.
 export function drawStructureThumb(canvas: HTMLCanvasElement, id: string) {
   const g = canvas.getContext("2d")!;
+  themeContext(g);
   g.clearRect(0, 0, canvas.width, canvas.height);
   const def = STRUCTURES[id];
   const size = def.kind === "road" ? 2.2 : def.size + 0.3;
@@ -1410,6 +2083,10 @@ export function drawStructureThumb(canvas: HTMLCanvasElement, id: string) {
     else if (def.kind === "apiary") drawApiary(g, 0, 0, false, 0);
     else if (def.kind === "clinic") drawClinic(g, 0, 0);
     else if (def.kind === "church") drawChurch(g, 0, 0);
+    else if (def.kind === "farm") drawFarm(g, 0, 0);
+    else if (def.kind === "stable") drawStable(g, 0, 0, 0, [{ eat: 0, drink: 0 }, { eat: 0, drink: 0 }]);
+    else if (def.kind === "market") drawMarket(g, 0, 0, 0, true);
+    else if (def.kind === "pigpen") drawPigpen(g, 0, 0, 0, [{ age: 300, eat: 0, drink: 0 }, { age: 100, eat: 0, drink: 0 }, { age: 300, eat: 0, drink: 0 }]);
     else drawDepot(g, 0, 0);
   }
   g.restore();
@@ -1441,8 +2118,8 @@ export function drawEntrance(g: CanvasRenderingContext2D, gx: number, gy: number
 
 // Chantier : fondations posées, puis le bâtiment qui monte à mesure que la construction avance.
 // have/need : bois livré ; progress : de 0 à 1 une fois les matériaux réunis.
-export function drawSite(g: CanvasRenderingContext2D, kind: "camp" | "depot" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church", gx: number, gy: number, have: number, need: number, progress: number, t: number, rot = 0, undo = false, plank = false) {
-  const size = kind === "depot" || kind === "sawmill" || kind === "butcher" || kind === "port" || kind === "church" ? 3 : 2;
+export function drawSite(g: CanvasRenderingContext2D, kind: "camp" | "depot" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market", gx: number, gy: number, have: number, need: number, progress: number, t: number, rot = 0, undo = false, plank = false) {
+  const size = kind === "farm" ? 5 : kind === "stable" || kind === "pigpen" ? 4 : kind === "depot" || kind === "sawmill" || kind === "butcher" || kind === "port" || kind === "church" ? 3 : 2;
   const x = gx * C;
   const y = gy * C;
   const w = size * C;
@@ -1479,6 +2156,10 @@ export function drawSite(g: CanvasRenderingContext2D, kind: "camp" | "depot" | "
     else if (kind === "apiary") drawApiary(g, gx, gy, false, 0, rot);
     else if (kind === "clinic") drawClinic(g, gx, gy, rot);
     else if (kind === "church") drawChurch(g, gx, gy, rot);
+    else if (kind === "farm") drawFarm(g, gx, gy, rot);
+    else if (kind === "stable") drawStable(g, gx, gy, rot);
+    else if (kind === "pigpen") drawPigpen(g, gx, gy, rot);
+    else if (kind === "market") drawMarket(g, gx, gy, rot);
     else drawDepot(g, gx, gy, rot);
     g.restore();
     g.globalAlpha = 1;

@@ -1,7 +1,7 @@
-import { CHURCH_GRAVES, COSTS, CUT_SEC, HONEY_CAP, PRICE_HONEY, HOUSE_CAPACITY, LODGE_CAP, LOGS_PER_PLANK, PRICE_CUTS, PRICE_PLANK, SHIP_CYCLE } from "./balance";
+import { PIGS_MAX, PIG_PRICE, PIG_MEAT, COW_PRICE, STABLE_COWS_MAX, CHURCH_GRAVES, COSTS, CUT_SEC, HONEY_CAP, PRICE_HONEY, HOUSE_CAPACITY, LODGE_CAP, LOGS_PER_PLANK, PRICE_CUTS, PRICE_PLANK, SHIP_CYCLE } from "./balance";
 
 // Catalogue des structures qu'on pose d'un seul coup avec 🔨 Construire.
-export type StructureKind = "camp" | "depot" | "road" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church";
+export type StructureKind = "camp" | "depot" | "road" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market";
 
 export interface StructureDef {
   id: string;
@@ -112,6 +112,50 @@ export const STRUCTURE_LIST: StructureDef[] = [
     size: 2,
     buildSec: K.apiary.sec,
     desc: `2 × 2 cases d'herbe libre : quatre ruches. Les abeilles font du miel (jusqu'à ${HONEY_CAP} pots), mais seulement si un apiculteur les soigne et les récolte ; il apporte le miel à un dépôt, d'où le port l'exporte (${PRICE_HONEY} pièces le pot). Rien en hiver : les abeilles dorment. Fondations (${K.apiary.coins} pièces), puis ${K.apiary.mat} planches à livrer.`,
+  },
+  {
+    id: "farm",
+    label: "Ferme",
+    kind: "farm",
+    cost: K.farm.coins,
+    woodCost: K.farm.mat,
+    material: "plank",
+    size: 5,
+    buildSec: K.farm.sec,
+    desc: `5 × 5 cases d'herbe libre : douze parcelles où des fermiers cultivent, au choix, du blé, du maïs, des tomates ou des carottes (une culture à la fois, à changer dans le menu). Il faut ARROSER : les fermiers vont chercher l'eau au puits, remplissent la cuve de la ferme et arrosent les parcelles ; sans eau, rien ne pousse. L'avancement de chaque parcelle est visible. Les récoltes sont rangées au dépôt : de la nourriture pour les maisons, que le port achète. Rien ne pousse en hiver (sauf un peu les carottes). Fondations (${K.farm.coins} pièces), puis ${K.farm.mat} planches à livrer.`,
+  },
+  {
+    id: "market",
+    label: "Marché",
+    kind: "market",
+    cost: K.market.coins,
+    woodCost: K.market.mat,
+    material: "plank",
+    size: 3,
+    buildSec: K.market.sec,
+    desc: `3 × 3 cases d'herbe libre. Une caravane de marchands y passe de temps en temps : elle vend des marchandises et en achète, puis repart. Tu achètes et tu vends depuis son menu, sans employé. Fondations (${K.market.coins} pièces), puis ${K.market.mat} planches à livrer.`,
+  },
+  {
+    id: "pigpen",
+    label: "Porcherie",
+    kind: "pigpen",
+    cost: K.pigpen.coins,
+    woodCost: K.pigpen.mat,
+    material: "plank",
+    size: 4,
+    buildSec: K.pigpen.sec,
+    desc: `4 × 4 cases d'herbe libre : une porcherie et son enclos pour ${PIGS_MAX} cochons au plus (${PIG_PRICE} pièces le porcelet). Ils mangent des légumes de la ferme et boivent de l'eau, grandissent, et deux adultes bien soignés font de nouveaux porcelets. Un porcher apporte les légumes et l'eau, et abat les adultes quand tu le demandes (${PIG_MEAT} viandes brutes chacun, rangées au dépôt pour le boucher). Fondations (${K.pigpen.coins} pièces), puis ${K.pigpen.mat} planches à livrer.`,
+  },
+  {
+    id: "stable",
+    label: "Étable",
+    kind: "stable",
+    cost: K.stable.coins,
+    woodCost: K.stable.mat,
+    material: "plank",
+    size: 4,
+    buildSec: K.stable.sec,
+    desc: `4 × 4 cases d'herbe libre : une étable et son enclos pour ${STABLE_COWS_MAX} vaches au plus (${COW_PRICE} pièces la vache). Elles mangent de l'herbe (cultivée à la ferme) et boivent de l'eau (du puits) et, bien soignées, donnent du lait. Un éleveur apporte l'herbe et l'eau, trait les vaches et range le lait au dépôt : de la nourriture, que le port achète. Fondations (${K.stable.coins} pièces), puis ${K.stable.mat} planches à livrer.`,
   },
   {
     id: "church",

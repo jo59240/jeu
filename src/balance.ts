@@ -28,6 +28,10 @@ export const COSTS = {
   port: { coins: 60, mat: 14, sec: 14 }, // planches ; sur la côte seulement
   clinic: { coins: 40, mat: 8, sec: 8 }, // planches ; la maison du soigneur
   church: { coins: 70, mat: 16, sec: 16 }, // planches ; l'église et son cimetière
+  farm: { coins: 90, mat: 20, sec: 18 }, // planches ; la ferme (5 × 5 cases, douze parcelles)
+  stable: { coins: 70, mat: 16, sec: 14 }, // planches ; l'étable (4 × 4 cases) et son enclos
+  market: { coins: 50, mat: 12, sec: 12 }, // planches ; le marché (3 × 3 cases) où passe la caravane
+  pigpen: { coins: 60, mat: 14, sec: 12 }, // planches ; la porcherie (4 × 4 cases) et son enclos
 };
 
 // ---------- villageois ----------
@@ -97,10 +101,27 @@ export const FOOD_MAX = 4; // nourriture portée par un habitant en corvée
 export const PORT_CAP = 24; // quantité maximale qu'on peut choisir d'exporter par bateau et par marchandise
 export const PORT_QUOTA_DEFAULT = 0; // quantité exportée par bateau au départ : rien, c'est au joueur de régler chaque marchandise dans le menu du port
 export const SHIP_CYCLE = 120; // un bateau passe toutes les 120 s
+// Tout ce que le port peut exporter : chaque ressource a son prix et son propre réglage « par bateau ». Les identifiants sont ceux de ce que portent les villageois.
+export const EXPORT_GOODS = {
+  wood: { label: "Bûches", emoji: "🪵", price: 1 }, // prises dans les camps de bûcheron
+  plank: { label: "Planches", emoji: "🪚", price: 2 }, // dépôts et scieries
+  meat: { label: "Viande brute", emoji: "🍖", price: 2 }, // camps de chasseur
+  cuts: { label: "Viande préparée", emoji: "🥩", price: 3 }, // dépôts et boucheries
+  honey: { label: "Miel", emoji: "🍯", price: 4 },
+  berries: { label: "Baies", emoji: "🫐", price: 2 },
+  wheat: { label: "Blé", emoji: "🌾", price: 2 },
+  corn: { label: "Maïs", emoji: "🌽", price: 3 },
+  tomato: { label: "Tomates", emoji: "🍅", price: 4 },
+  carrot: { label: "Carottes", emoji: "🥕", price: 2 },
+  grass: { label: "Herbe", emoji: "🌿", price: 1 },
+  milk: { label: "Lait", emoji: "🥛", price: 3 },
+} as const;
+export type ExportGood = keyof typeof EXPORT_GOODS;
 export const PRICE_PLANK = 2; // pièces par planche exportée
 export const PRICE_CUTS = 3; // pièces par viande préparée exportée
 export const PRICE_HONEY = 4; // pièces par pot de miel exporté
 export const PRICE_BERRIES = 2; // pièces par baie exportée
+// (le prix d'une récolte dépend de la culture : voir FARM_CROPS)
 
 // ---------- faune ----------
 export const POPULATION = { rabbit: 36, deer: 10, boar: 6 }; // effectif d'origine
@@ -130,6 +151,9 @@ export const JOBS = {
   port: { slots: 2, label: "Porteur" },
   sawmill: { slots: 2, label: "Scieur" },
   butcher: { slots: 2, label: "Boucher" },
+  pigpen: { slots: 2, label: "Porcher" }, // nourrit et fait boire les cochons, les abat quand on le demande et rapporte la viande au dépôt
+  stable: { slots: 2, label: "Éleveur" }, // nourrit et fait boire les vaches, trait le lait et le range au dépôt
+  farm: { slots: 3, label: "Fermier" }, // sème, fait pousser et récolte les parcelles, puis range la récolte au dépôt
   church: { slots: 2, label: "Fossoyeur" }, // va chercher les défunts devant leur maison et les met au cimetière
   clinic: { slots: 2, label: "Soigneur" }, // prépare des remèdes avec des baies et du miel, et soigne les malades
   gather: { slots: 2, label: "Cueilleur" }, // employé d'un dépôt : cueille les baies alentour et les y range
@@ -147,6 +171,73 @@ export const LIFESPAN_MIN = 70;
 export const LIFESPAN_MAX = 90;
 export const AGE_ELDER = 60; // à partir de là : « âgé »
 export const AGE_WARN = 5; // prévenu cinq ans avant la fin
+
+// ---------- marché et caravane ----------
+// Le marché (3 × 3 cases) reçoit de temps en temps une caravane de marchands : elle reste un moment, vend des marchandises (plus cher que le port ne les paie)
+// et en achète d'autres (mieux que le port), puis repart avec ses stocks. Pas besoin d'employé : le joueur achète et vend depuis le menu du marché.
+export const MARKET_FIRST_SEC = 90; // la première caravane arrive peu après la construction
+export const MARKET_GAP_SEC: [number, number] = [600, 1000]; // entre deux caravanes (une journée = 600 s)
+export const MARKET_STAY_SEC = 330; // elle reste ce temps-là
+export const MARKET_BUY_MULT = 2; // le joueur paie le prix d'export × 2
+export const MARKET_SELL_MULT = 1.5; // la caravane paie le prix d'export × 1,5
+export const MARKET_PURSE = 150; // pièces que la caravane peut dépenser chez toi
+export const MARKET_WANTS = 10; // unités qu'elle voudrait acheter de chaque marchandise recherchée
+
+// ---------- porcherie et cochons ----------
+// La porcherie (4 × 4 cases) élève des cochons pour leur viande. On achète des porcelets ; ils mangent des légumes de la ferme (les mêmes que les villageois) et boivent de l'eau ;
+// bien nourris et abreuvés ils grandissent, et deux adultes bien soignés font de nouveaux porcelets. Un porcher apporte les légumes et l'eau, et abat les adultes
+// quand on le demande (ou tout seul au-delà de PIG_KEEP adultes si l'abattage automatique est activé) : la viande brute va au dépôt, où le boucher la prend.
+export const PIGPEN_SIZE = 4;
+export const PIGS_MAX = 8;
+export const PIG_PRICE = 40; // un porcelet
+export const PIG_SELL = 15; // si on démonte la porcherie, chaque cochon est revendu
+export const PIG_ADULT_SEC = 240; // un porcelet bien nourri est adulte au bout de 4 minutes
+export const PIG_EAT_SEC = 60; // un cochon mange un légume toutes les 60 s
+export const PIG_DRINK_SEC = 45; // et boit une unité d'eau toutes les 45 s
+export const PIG_BREED_SEC = 150; // deux adultes bien soignés : un porcelet toutes les 150 s (s'il reste de la place)
+export const PIG_MEAT = 4; // viande brute d'un cochon adulte
+export const PIG_FEED_CAP = 24; // l'auge : légumes en réserve
+export const PIG_WATER_CAP = 24; // l'abreuvoir : eau en réserve
+export const PIG_KEEP = 2; // abattage automatique : on garde ce nombre d'adultes pour la reproduction
+export const SWINE_CARRY = 8; // ce qu'un porcher porte (légumes, eau)
+
+// ---------- étable et vaches ----------
+// L'étable (4 × 4 cases) abrite des vaches (achetées une à une). Une vache mange de l'herbe (cultivée à la ferme, rangée au dépôt) et boit de l'eau (du puits) ;
+// bien nourrie et abreuvée, elle donne du lait. Un éleveur apporte l'herbe et l'eau, trait les vaches et range le lait au dépôt : c'est de la nourriture, et le port l'achète.
+export const STABLE_SIZE = 4;
+export const STABLE_COWS_MAX = 6;
+export const COW_PRICE = 50; // une vache
+export const COW_SELL = 25; // on la revend la moitié
+export const STABLE_FEED_CAP = 24; // l'auge : herbe en réserve
+export const STABLE_WATER_CAP = 24; // l'abreuvoir : eau en réserve
+export const STABLE_MILK_CAP = 20; // le lait trait à ramasser
+export const COW_EAT_SEC = 70; // une vache mange une unité d'herbe toutes les 70 s
+export const COW_DRINK_SEC = 50; // et boit une unité d'eau toutes les 50 s
+export const MILK_SEC = 45; // une vache nourrie et abreuvée donne 1 lait toutes les 45 s (×saison)
+export const MILK_SEASON = [1.1, 1.0, 0.9, 0.7]; // printemps, été, automne, hiver
+export const HERDER_CARRY = 8; // ce qu'un éleveur porte (herbe, eau, lait)
+
+// ---------- ferme ----------
+// Une ferme (5 × 5 cases) a douze parcelles où l'on cultive UNE culture à la fois (au choix : blé, maïs, tomates ou carottes). Un fermier sème, ARROSE (l'eau vient
+// d'un puits, via la cuve de la ferme : sans eau, ça ne pousse pas), attend, récolte et range la récolte dans un dépôt. Les récoltes sont de la nourriture pour les maisons, et le port les exporte.
+// season : vitesse de pousse au printemps, été, automne, hiver (0 : rien ne pousse).
+export const FARM_CROPS = {
+  wheat: { label: "Blé", emoji: "🌾", growSec: 160, yield: 6, price: 2, season: [1.0, 1.2, 0.8, 0] },
+  corn: { label: "Maïs", emoji: "🌽", growSec: 210, yield: 5, price: 3, season: [0.8, 1.4, 0.7, 0] },
+  tomato: { label: "Tomates", emoji: "🍅", growSec: 250, yield: 4, price: 4, season: [0.7, 1.5, 0.5, 0] },
+  carrot: { label: "Carottes", emoji: "🥕", growSec: 120, yield: 6, price: 2, season: [1.2, 0.8, 1.0, 0.3] },
+  grass: { label: "Herbe", emoji: "🌿", growSec: 90, yield: 8, price: 1, season: [1.3, 1.0, 0.9, 0.3] }, // pour les vaches : pas pour les hommes
+} as const;
+export type FarmCrop = keyof typeof FARM_CROPS;
+export const FARM_SIZE = 5; // la ferme occupe 5 × 5 cases
+export const FARM_PLOTS = 12; // parcelles (4 × 3)
+export const WET_SEC = 150; // une parcelle arrosée reste humide ce temps (s) ; sèche, la pousse s'arrête
+export const DRY_BELOW = 0.3; // sous cette humidité, la parcelle réclame de l'eau
+export const FARM_TANK_CAP = 20; // la cuve de la ferme, remplie au puits par le fermier ; chaque arrosage prend 1 unité
+export const FARM_FETCH = 8; // eau qu'un fermier rapporte du puits en un voyage
+export const SOW_SEC = 2; // semer une parcelle
+export const REAP_SEC = 2.5; // récolter une parcelle
+export const FARM_CARRY = 12; // récolte qu'un fermier porte avant d'aller la ranger
 
 // ---------- église et cimetière ----------
 // Quand un villageois meurt, son corps reste devant sa maison. Un fossoyeur (employé de l'église) le prend et le porte au cimetière de l'église.

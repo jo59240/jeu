@@ -6,13 +6,14 @@
 // Bâtisseur : il va chercher le bois dans les camps et dépôts reliés au chantier par les chemins, le livre, puis construit.
 //
 // Un personnage ne traverse pas les bâtiments : il s'arrête à côté (les chemins sont calculés par le jeu).
+import { isViking, vn } from "./theme";
 import { healSkill } from "./state";
 import { C } from "./draw";
 import { CARRY_MAX, CREW_COLORS, FEMALE_NAMES, FOOD_MAX, HAUL_MAX, HUNT_CARRY, HaulDest, WATER_MAX, WorkerSave, haulDest } from "./state";
 import { objects, T, terrainAt } from "./world";
 import { Zone } from "./zone";
 import { HARVEST_MAX, HARVEST_MIN, HARVEST_SEC, TEND_BELOW, TEND_SEC } from "./balance";
-import { NIGHT_DRAIN, NIGHT_IDLE_HOME, NIGHT_REST, SPEED, CHOP_SECONDS, LOAD_SECONDS, HUNT_RANGE, AIM_SECONDS, IDLE_HOME_SEC, DRAIN, REST_RATE, IDLE_RATE, TIRED, EXHAUSTED, WAKE_AT, NEED_GO, NEED_BAD, BERRY_CARRY, BERRY_PICK_SEC, BREW_SEC, ILLNESSES, SICK_BED, SICK_SLOW, AGE_ELDER } from "./balance";
+import { NIGHT_DRAIN, NIGHT_IDLE_HOME, NIGHT_REST, SPEED, CHOP_SECONDS, LOAD_SECONDS, HUNT_RANGE, AIM_SECONDS, IDLE_HOME_SEC, DRAIN, REST_RATE, IDLE_RATE, TIRED, EXHAUSTED, WAKE_AT, NEED_GO, NEED_BAD, BERRY_CARRY, BERRY_PICK_SEC, BREW_SEC, ExportGood, ILLNESSES, SICK_BED, SICK_SLOW, AGE_ELDER, FARM_CROPS, FarmCrop, SOW_SEC, REAP_SEC } from "./balance";
 
 
 type Cell = { gx: number; gy: number };
@@ -31,6 +32,33 @@ export type BuryPlan =
   | { type: "pick"; target: Cell; corpseId: number } // aller prendre ce défunt devant sa maison
   | { type: "inter"; target: Cell }; // le porter à l'église et l'enterrer
 
+// Une étape du travail du fermier.
+export type FarmPlan =
+  | { type: "sow"; target: Cell; plot: number } // semer cette parcelle
+  | { type: "water"; target: Cell; plot: number } // l'arroser avec l'eau de la cuve
+  | { type: "reap"; target: Cell; plot: number } // récolter cette parcelle
+  | { type: "fetch"; target: Cell; wellId: number } // aller chercher de l'eau à ce puits
+  | { type: "pour"; target: Cell } // vider l'eau dans la cuve de la ferme
+  | { type: "deliver"; target: Cell; depotId: number }; // ranger la récolte dans ce dépôt
+
+// Une étape du travail de l'éleveur.
+export type StablePlan =
+  | { type: "milk"; target: Cell } // traire les vaches et emporter le lait
+  | { type: "deliver"; target: Cell; depotId: number } // ranger le lait au dépôt
+  | { type: "fetchGrass"; target: Cell; depotId: number } // prendre de l'herbe au dépôt
+  | { type: "feed"; target: Cell } // la verser dans l'auge
+  | { type: "fetchWater"; target: Cell; wellId: number } // puiser de l'eau au puits
+  | { type: "pour"; target: Cell }; // la verser dans l'abreuvoir
+
+// Une étape du travail du porcher.
+export type SwinePlan =
+  | { type: "fetchCrop"; target: Cell; depotId: number } // prendre des légumes au dépôt
+  | { type: "feed"; target: Cell } // les verser dans l'auge
+  | { type: "fetchWater"; target: Cell; wellId: number } // puiser de l'eau au puits
+  | { type: "pour"; target: Cell } // la verser dans l'abreuvoir
+  | { type: "slaughter"; target: Cell } // abattre un cochon adulte
+  | { type: "deliver"; target: Cell; depotId: number }; // ranger la viande au dépôt
+
 export interface WorkerEnv {
   findPath(from: Cell, to: Cell, self: Worker): [number, number][] | null; // contourne les personnages immobiles
   taken(cell: Cell, self: Worker): boolean; // un autre personnage s'y tient ou vient de la réserver
@@ -47,11 +75,11 @@ export interface WorkerEnv {
   deposit(n: number, w: Worker): number; // dépose au camp ; renvoie ce que le camp a pu prendre
 
   // porteur : il appartient à un dépôt et va chercher le bois des camps reliés à ce dépôt par les chemins
-  depotInfo(id: number, dest?: HaulDest, good?: "plank" | "cuts" | "honey" | "berries"): { free: number } | null; // good : pour un port, la place restante pour cette marchandise
+  depotInfo(id: number, dest?: HaulDest, good?: ExportGood): { free: number } | null; // good : pour un port, la place restante pour cette marchandise
   anyHaulTask(from: Cell, cargo?: string): { dest: HaulDest; id: number } | null; // porteur universel : la prochaine livraison utile (cargo : ce qu'il porte déjà)
   haulRoute(depotId: number, wantWood: boolean, dest?: HaulDest): HaulRoute; // wantWood : on cherche un camp qui a du bois à prendre
   roadPath(from: Cell, to: Cell, self: Worker): [number, number][] | null; // trajet par les chemins seulement
-  depositDepot(depotId: number, n: number, w: Worker, dest?: HaulDest, plank?: boolean, cuts?: boolean, honey?: boolean, berries?: boolean): number; // dépose à ce dépôt ; renvoie ce qu'il a pu prendre
+  depositDepot(depotId: number, n: number, w: Worker, dest?: HaulDest, plank?: boolean, cuts?: boolean, honey?: boolean, berries?: boolean, crop?: FarmCrop): number; // dépose à ce dépôt ; renvoie ce qu'il a pu prendre
   onRoad(gx: number, gy: number): boolean; // on marche plus vite sur un chemin
   night(): number; // obscurité de 0 (jour) à 1 (nuit)
   climate(): { drain: number; speed: number }; // la saison : fatigue et vitesse de marche
@@ -63,6 +91,21 @@ export interface WorkerEnv {
   // ouvrier : la scierie ou la boucherie où il travaille sur place
   craftReady(kind: "sawmill" | "butcher", id: number): boolean; // de quoi transformer en ce moment ?
   craftInfo(kind: "sawmill" | "butcher", id: number): { entrance: Cell; center: { x: number; y: number } } | null; // null : le bâtiment n'existe plus
+
+  // éleveur : nourrir et abreuver les vaches, traire, ranger le lait
+  stableInfo(stableId: number): boolean; // false : l'étable n'existe plus
+  stablePlan(stableId: number, from: Cell, w: Worker): StablePlan | null;
+  stableDo(plan: StablePlan, w: Worker): void;
+
+  // porcher : nourrir et abreuver les cochons, les abattre, ranger la viande
+  pigInfo(pigpenId: number): boolean; // false : la porcherie n'existe plus
+  pigPlan(pigpenId: number, from: Cell, w: Worker): SwinePlan | null;
+  pigDo(plan: SwinePlan, w: Worker): void;
+
+  // fermier : semer, récolter, ranger la récolte
+  farmInfo(farmId: number): boolean; // false : la ferme n'existe plus
+  farmPlan(farmId: number, from: Cell, w: Worker): FarmPlan | null;
+  farmDo(plan: FarmPlan, w: Worker): void;
 
   // fossoyeur : aller chercher les défunts et les enterrer au cimetière de l'église
   churchInfo(churchId: number): boolean; // false : l'église n'existe plus
@@ -106,7 +149,8 @@ export interface WorkerEnv {
   siteInfo(id: number): { missing: number; ready: boolean; entrance: Cell; plank: boolean } | null; // null : le chantier n'existe plus (terminé ou annulé)
   buildRoute(siteId: number, wantWood: boolean): BuildRoute;
   takeFromSource(src: { kind: "camp" | "depot" | "sawmill" | "lodge" | "butcher"; id: number }, max: number, plank?: boolean, cuts?: boolean, honey?: boolean, berries?: boolean): number;
-  exportGood(depotId: number, portId: number): "plank" | "cuts" | "honey" | "berries" | null; // quelle marchandise exportable ce dépôt a à offrir // plank : on cherche des planches (dépôts)
+  exportGood(src: { kind: "camp" | "depot" | "sawmill" | "lodge" | "butcher"; id: number }, portId: number): ExportGood | null; // la ressource que cette source a à offrir à ce port
+  takeGood(src: { kind: "camp" | "depot" | "sawmill" | "lodge" | "butcher"; id: number }, good: ExportGood, max: number): number; // prend cette ressource à la source (pour l'export) // quelle marchandise exportable ce dépôt a à offrir // plank : on cherche des planches (dépôts)
   depositSite(siteId: number, n: number, w: Worker): number; // livre au chantier ; renvoie ce qu'il a pu prendre
   workCell(siteId: number, from: Cell): Cell | null; // case libre au bord du chantier où travailler
   work(siteId: number, dt: number): boolean; // fait avancer le chantier ; true quand le bâtiment est terminé
@@ -137,7 +181,7 @@ function tint(hex: string, k: number): string {
   return `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`;
 }
 
-type State = "idle" | "toTree" | "chopping" | "toCamp" | "toPickup" | "loading" | "toDepot" | "unloading" | "toWork" | "building" | "toHome" | "toPrey" | "aiming" | "toHive" | "tending" | "harvesting" | "toCraft" | "crafting" | "toBerry" | "picking" | "toHeal" | "healing" | "toBury" | "burying";
+type State = "idle" | "toTree" | "chopping" | "toCamp" | "toPickup" | "loading" | "toDepot" | "unloading" | "toWork" | "building" | "toHome" | "toPrey" | "aiming" | "toHive" | "tending" | "harvesting" | "toCraft" | "crafting" | "toBerry" | "picking" | "toHeal" | "healing" | "toBury" | "burying" | "toField" | "farming" | "toStall" | "stalling";
 
 export class Worker {
   private path: [number, number][] = [];
@@ -173,6 +217,8 @@ export class Worker {
   private resumeGoal: Cell | null = null; // destination à rejoindre après s'être écarté pour laisser passer
   private warned = false; // il a déjà prévenu pour ce blocage
   private idleT = 0; // depuis combien de temps il ne fait rien
+  private stallTask: StablePlan | SwinePlan | null = null; // éleveur : l'étape en cours
+  private farmTask: FarmPlan | null = null; // fermier : l'étape en cours
   private buryTask: BuryPlan | null = null; // fossoyeur : l'étape en cours
   private healTask: HealPlan | null = null; // soigneur : l'étape en cours
   private visiting = false; // chez lui pour boire ou manger
@@ -189,7 +235,7 @@ export class Worker {
     return this.data.y;
   }
   get name() {
-    return this.data.name;
+    return vn(this.data.name); // le prénom affiché (viking ou classique) ; la sauvegarde garde le prénom d'origine
   }
   get cell(): Cell {
     return { gx: Math.floor(this.data.x), gy: Math.floor(this.data.y) };
@@ -325,7 +371,7 @@ export class Worker {
   }
 
   // Change de métier : la tenue change, et le travail en cours s'arrête.
-  setRole(role: "none" | "wood" | "haul" | "build" | "water" | "hunt" | "bee" | "craft" | "gather" | "heal" | "bury", env: WorkerEnv) {
+  setRole(role: "none" | "wood" | "haul" | "build" | "water" | "hunt" | "bee" | "craft" | "gather" | "heal" | "bury" | "farm" | "tend" | "swine", env: WorkerEnv) {
     this.leave(env);
     this.data.resume = undefined;
     this.data.resting = false;
@@ -387,6 +433,56 @@ export class Worker {
   // Il travaille sur place (c'est ce qui fait tourner la scierie ou la boucherie).
   get crafting() {
     return this.state === "crafting";
+  }
+
+  // Le soigneur prépare un remède : il est entré dans sa maison, on ne le voit plus.
+  get brewing() {
+    return this.state === "healing" && this.healTask?.type === "brew";
+  }
+
+  // Devient éleveur de cette étable : il nourrit et abreuve les vaches, trait le lait et le range au dépôt.
+  startTend(stableId: number, env: WorkerEnv) {
+    this.leave(env);
+    this.data.resume = undefined;
+    this.data.resting = false;
+    this.releaseTree(env);
+    this.data.role = "tend";
+    this.resetWait();
+    this.data.job = { type: "tend", stableId, milked: 0 };
+    this.stallTask = null;
+    this.state = "idle";
+    this.path = [];
+    env.changed();
+  }
+
+  // Devient porcher de cette porcherie : il nourrit et abreuve les cochons, les abat sur ordre et range la viande au dépôt.
+  startSwine(pigpenId: number, env: WorkerEnv) {
+    this.leave(env);
+    this.data.resume = undefined;
+    this.data.resting = false;
+    this.releaseTree(env);
+    this.data.role = "swine";
+    this.resetWait();
+    this.data.job = { type: "swine", pigpenId, slaughtered: 0 };
+    this.stallTask = null;
+    this.state = "idle";
+    this.path = [];
+    env.changed();
+  }
+
+  // Devient fermier de cette ferme : il sème, récolte et range la récolte au dépôt.
+  startFarm(farmId: number, env: WorkerEnv) {
+    this.leave(env);
+    this.data.resume = undefined;
+    this.data.resting = false;
+    this.releaseTree(env);
+    this.data.role = "farm";
+    this.resetWait();
+    this.data.job = { type: "farm", farmId, harvested: 0 };
+    this.farmTask = null;
+    this.state = "idle";
+    this.path = [];
+    env.changed();
   }
 
   // Devient fossoyeur de cette église : il enterre les défunts.
@@ -646,6 +742,29 @@ export class Worker {
       }
       return;
     }
+    if (this.state === "stalling") {
+      this.timer += dt;
+      const plan = this.stallTask;
+      if (this.timer < (plan?.type === "milk" ? 2.6 : plan?.type === "slaughter" ? 3 : 1.8)) return;
+      this.state = "idle";
+      this.stallTask = null;
+      if (plan) {
+        if (this.data.job?.type === "swine") env.pigDo(plan as SwinePlan, this);
+        else env.stableDo(plan as StablePlan, this);
+      }
+      env.changed();
+      return;
+    }
+    if (this.state === "farming") {
+      this.timer += dt;
+      const plan = this.farmTask;
+      if (this.timer < (plan?.type === "sow" ? SOW_SEC : plan?.type === "reap" ? REAP_SEC : plan?.type === "water" ? 1.2 : 1.8)) return;
+      this.state = "idle";
+      this.farmTask = null;
+      if (plan) env.farmDo(plan, this);
+      env.changed();
+      return;
+    }
     if (this.state === "burying") {
       this.timer += dt;
       if (this.timer < (this.buryTask?.type === "inter" ? 3.2 : 2.2)) return;
@@ -769,6 +888,9 @@ export class Worker {
     else if (job.type === "gather") this.gatherStep(env);
     else if (job.type === "heal") this.healStep(env);
     else if (job.type === "bury") this.buryStep(env);
+    else if (job.type === "farm") this.farmStep(env);
+    else if (job.type === "tend") this.tendStep(env);
+    else if (job.type === "swine") this.swineStep(env);
     else this.waterStep(env);
   }
 
@@ -850,6 +972,9 @@ export class Worker {
       return depot.free > 0 && env.haulRoute(job.depotId, this.data.carry === 0, haulDest(job)).ok;
     }
     if (job.type === "water") return env.waterTarget(job.houseId, this.data.carry === 0, job.food).ok;
+    if (job.type === "swine") return env.pigInfo(job.pigpenId) ? env.pigPlan(job.pigpenId, this.cell, this) !== null : true;
+    if (job.type === "tend") return env.stableInfo(job.stableId) ? env.stablePlan(job.stableId, this.cell, this) !== null : true;
+    if (job.type === "farm") return env.farmInfo(job.farmId) ? env.farmPlan(job.farmId, this.cell, this) !== null : true;
     if (job.type === "bury") return env.churchInfo(job.churchId) ? env.buryPlan(job.churchId, this.cell, this) !== null : true;
     if (job.type === "heal") return env.clinicInfo(job.clinicId) ? env.healPlan(job.clinicId, this.cell, this) !== null : true;
     if (job.type === "gather") return this.data.carry > 0 ? env.honeyDepot(this.cell) !== null : env.berryTarget(job.depotId, this.cell, false, this.ignore) !== null;
@@ -890,9 +1015,15 @@ export class Worker {
     const job = d.job;
     if (!job) return this.moving ? "En route" : "Disponible";
     if (this.waiting && !this.moving) return "Rien à faire pour le moment";
-    const what = d.cargo === "plank" ? "🪚" : d.cargo === "water" ? "💧" : d.cargo === "meat" ? "🍖" : d.cargo === "cuts" ? "🥩" : d.cargo === "honey" ? "🍯" : d.cargo === "berries" ? "🫐" : d.cargo === "tisane" ? "🍵" : d.cargo === "syrup" ? "🧪" : d.cargo === "body" ? "⚰️" : "🪵";
+    const what = d.cargo === "plank" ? "🪚" : d.cargo === "water" ? "💧" : d.cargo === "meat" ? "🍖" : d.cargo === "cuts" ? "🥩" : d.cargo === "honey" ? "🍯" : d.cargo === "berries" ? "🫐" : d.cargo === "tisane" ? "🍵" : d.cargo === "syrup" ? "🧪" : d.cargo === "body" ? "⚰️" : d.cargo === "milk" ? "🥛" : d.cargo && d.cargo in FARM_CROPS ? FARM_CROPS[d.cargo as FarmCrop].emoji : "🪵";
     const load = d.carry > 0 ? ` · ${d.carry} ${what}` : "";
     switch (job.type) {
+      case "swine":
+        return this.state === "stalling" ? (this.stallTask?.type === "slaughter" ? "Abat un cochon" : this.stallTask?.type === "feed" ? "Remplit l'auge" : this.stallTask?.type === "pour" ? "Remplit l'abreuvoir" : this.stallTask?.type === "deliver" ? "Range la viande" : "Charge") : d.carry > 0 ? (d.cargo === "meat" ? `Porte la viande${load}` : d.cargo === "water" ? "Rapporte de l'eau" : "Rapporte des légumes") : this.moving ? "En tournée" : "Veille sur les cochons";
+      case "tend":
+        return this.state === "stalling" ? (this.stallTask?.type === "milk" ? "Trait les vaches" : this.stallTask?.type === "feed" ? "Remplit l'auge" : this.stallTask?.type === "pour" ? "Remplit l'abreuvoir" : this.stallTask?.type === "deliver" ? "Range le lait" : "Charge") : d.carry > 0 ? (d.cargo === "milk" ? `Porte le lait${load}` : d.cargo === "water" ? "Rapporte de l'eau" : "Rapporte de l'herbe") : this.moving ? "En tournée" : "Veille sur les vaches";
+      case "farm":
+        return this.state === "farming" ? (this.farmTask?.type === "sow" ? "Sème" : this.farmTask?.type === "reap" ? "Récolte" : this.farmTask?.type === "water" ? "Arrose" : this.farmTask?.type === "fetch" ? "Puise de l'eau" : this.farmTask?.type === "pour" ? "Remplit la cuve" : "Range la récolte") : d.carry > 0 && d.cargo === "water" ? "Rapporte de l'eau" : d.carry > 0 ? `Porte la récolte${load}` : this.moving ? "Va aux champs" : "Surveille les cultures";
       case "bury":
         return this.state === "burying" ? (this.buryTask?.type === "inter" ? "Enterre un défunt" : "Prend un défunt") : d.carry > 0 ? "Porte un défunt à l'église" : this.moving ? "Va chercher un défunt" : "Veille sur le cimetière";
       case "heal":
@@ -916,7 +1047,7 @@ export class Worker {
   }
 
   // Les bâtiments auxquels il est lié en ce moment (le menu d'un bâtiment liste ceux qui y travaillent).
-  involvedIn(): { kind: "camp" | "depot" | "sawmill" | "lodge" | "butcher" | "port" | "apiary" | "site" | "well" | "clinic" | "church"; id: number }[] {
+  involvedIn(): { kind: "camp" | "depot" | "sawmill" | "lodge" | "butcher" | "port" | "apiary" | "site" | "well" | "clinic" | "church" | "farm" | "stable" | "pigpen"; id: number }[] {
     const job = this.data.job;
     if (!job) return [];
     if (job.type === "hunt") return [{ kind: "lodge", id: job.lodgeId }];
@@ -924,6 +1055,9 @@ export class Worker {
     if (job.type === "gather") return [{ kind: "depot", id: job.depotId }];
     if (job.type === "heal") return [{ kind: "clinic", id: job.clinicId }];
     if (job.type === "bury") return [{ kind: "church", id: job.churchId }];
+    if (job.type === "farm") return [{ kind: "farm", id: job.farmId }];
+    if (job.type === "tend") return [{ kind: "stable", id: job.stableId }];
+    if (job.type === "swine") return [{ kind: "pigpen", id: job.pigpenId }];
     if (job.type === "build") return [{ kind: "site", id: job.siteId }];
     if (job.type === "water") {
       if (this.waterWell < 0) return [];
@@ -1013,6 +1147,14 @@ export class Worker {
         this.timer = 0;
         break;
       }
+      case "toStall":
+        this.state = "stalling";
+        this.timer = 0;
+        break;
+      case "toField":
+        this.state = "farming";
+        this.timer = 0;
+        break;
       case "toBury":
         this.state = "burying";
         this.timer = 0;
@@ -1368,6 +1510,126 @@ export class Worker {
     if (path.length) this.path = path;
     else {
       this.state = task === "tend" ? "tending" : "harvesting";
+      this.timer = 0;
+    }
+  }
+
+  // ---------- éleveur ----------
+
+  // Boucle de l'éleveur : le jeu choisit l'étape (ranger le lait, traire, remplir l'auge ou l'abreuvoir).
+  private tendStep(env: WorkerEnv) {
+    const job = this.data.job;
+    if (!job || job.type !== "tend") return;
+    const here = this.cell;
+    const wait = (secs: number) => {
+      this.waiting = true;
+      this.waitT = secs;
+      this.state = "idle";
+    };
+    if (!env.stableInfo(job.stableId)) {
+      this.data.job = null; // l'étable a disparu
+      this.data.role = "none";
+      this.state = "idle";
+      env.notify(`${this.name} n'a plus d'étable.`);
+      env.changed();
+      return;
+    }
+    const plan = env.stablePlan(job.stableId, here, this);
+    if (!plan) {
+      wait(4); // rien à faire pour l'instant
+      return;
+    }
+    const path = here.gx === plan.target.gx && here.gy === plan.target.gy ? [] : env.findPath(here, plan.target, this);
+    if (!path) {
+      wait(3);
+      return;
+    }
+    this.waiting = false;
+    this.stallTask = plan;
+    this.state = "toStall";
+    if (path.length) this.path = path;
+    else {
+      this.state = "stalling";
+      this.timer = 0;
+    }
+  }
+
+  // ---------- porcher ----------
+
+  // Boucle du porcher : le jeu choisit l'étape (ranger la viande, abattre, remplir l'auge ou l'abreuvoir).
+  private swineStep(env: WorkerEnv) {
+    const job = this.data.job;
+    if (!job || job.type !== "swine") return;
+    const here = this.cell;
+    const wait = (secs: number) => {
+      this.waiting = true;
+      this.waitT = secs;
+      this.state = "idle";
+    };
+    if (!env.pigInfo(job.pigpenId)) {
+      this.data.job = null; // la porcherie a disparu
+      this.data.role = "none";
+      this.state = "idle";
+      env.notify(`${this.name} n'a plus de porcherie.`);
+      env.changed();
+      return;
+    }
+    const plan = env.pigPlan(job.pigpenId, here, this);
+    if (!plan) {
+      wait(4);
+      return;
+    }
+    const path = here.gx === plan.target.gx && here.gy === plan.target.gy ? [] : env.findPath(here, plan.target, this);
+    if (!path) {
+      wait(3);
+      return;
+    }
+    this.waiting = false;
+    this.stallTask = plan;
+    this.state = "toStall";
+    if (path.length) this.path = path;
+    else {
+      this.state = "stalling";
+      this.timer = 0;
+    }
+  }
+
+  // ---------- fermier ----------
+
+  // Boucle du fermier : le jeu choisit l'étape (récolter une parcelle mûre, ranger la récolte, semer une parcelle vide).
+  private farmStep(env: WorkerEnv) {
+    const job = this.data.job;
+    if (!job || job.type !== "farm") return;
+    const here = this.cell;
+    const wait = (secs: number) => {
+      this.waiting = true;
+      this.waitT = secs;
+      this.state = "idle";
+    };
+    if (!env.farmInfo(job.farmId)) {
+      this.data.job = null; // la ferme a disparu
+      this.data.role = "none";
+      this.state = "idle";
+      env.notify(`${this.name} n'a plus de ferme.`);
+      env.changed();
+      return;
+    }
+    const plan = env.farmPlan(job.farmId, here, this);
+    if (!plan) {
+      wait(4); // rien à faire : ça pousse, ou plus de dépôt pour ranger la récolte
+      return;
+    }
+    const path = here.gx === plan.target.gx && here.gy === plan.target.gy ? [] : env.findPath(here, plan.target, this);
+    if (!path) {
+      wait(3);
+      return;
+    }
+    this.waiting = false;
+    this.farmTask = plan;
+    this.state = "toField";
+    if (path.length) this.path = path;
+    else {
+      this.state = "farming";
       this.timer = 0;
     }
   }
@@ -1813,9 +2075,28 @@ export class Worker {
     const tgt = this.haulTarget(job);
     if (this.pickSrc) {
       // chargement dans un dépôt (pour le port) : planches ou viande préparée, selon ce que le quota du port laisse encore passer
-      const good = this.pickSrc.kind === "depot" && tgt.kind === "port" ? env.exportGood(this.pickSrc.id, tgt.id) : null;
+      const good = tgt.kind === "port" ? env.exportGood(this.pickSrc, tgt.id) : null; // n'importe quelle ressource que le port attend
       const depot = env.depotInfo(tgt.id, tgt.kind, good ?? undefined);
       const room = depot ? depot.free : 0; // on ne charge pas plus que la destination ne peut recevoir
+      if (good) {
+        const n = env.takeGood(this.pickSrc, good, Math.min(HAUL_MAX - this.data.carry, room));
+        if (n > 0) {
+          this.data.cargo = good; // les identifiants des ressources exportables sont ceux de ce qu'on porte
+          this.data.carry += n;
+        }
+        env.changed();
+        return;
+      }
+      if (this.pickSrc.kind === "depot" && tgt.kind === "butcher") {
+        // le boucher prend la viande brute en réserve dans les dépôts, pas seulement dans les camps de chasseur
+        const n = env.takeGood(this.pickSrc, "meat", Math.min(HAUL_MAX - this.data.carry, room));
+        if (n > 0) {
+          this.data.cargo = "meat";
+          this.data.carry += n;
+        }
+        env.changed();
+        return;
+      }
       const got = env.takeFromSource(this.pickSrc, Math.min(HAUL_MAX - this.data.carry, room), good === "plank", good === "cuts", good === "honey", good === "berries");
       if (got > 0 && good) this.data.cargo = good === "plank" ? "plank" : good === "honey" ? "honey" : good === "berries" ? "berries" : "cuts";
       else if (got > 0) this.data.cargo = this.pickSrc.kind === "sawmill" ? "plank" : this.pickSrc.kind === "lodge" ? "meat" : this.pickSrc.kind === "butcher" ? "cuts" : "wood";
@@ -1887,7 +2168,7 @@ export class Worker {
     if (!job || job.type !== "haul") return;
     const n = this.data.carry;
     const tgt = this.haulTarget(job);
-    const taken = n > 0 ? env.depositDepot(tgt.id, n, this, tgt.kind, this.data.cargo === "plank", this.data.cargo === "cuts", this.data.cargo === "honey", this.data.cargo === "berries") : 0;
+    const taken = n > 0 ? env.depositDepot(tgt.id, n, this, tgt.kind, this.data.cargo === "plank", this.data.cargo === "cuts", this.data.cargo === "honey", this.data.cargo === "berries", this.data.cargo && this.data.cargo in FARM_CROPS ? (this.data.cargo as FarmCrop) : undefined) : 0;
     this.data.carry = n - taken;
     job.hauled += taken;
     if (this.data.carry > 0) {
@@ -1954,9 +2235,11 @@ export class Worker {
     const gatherer = role === "gather";
     const healer = role === "heal";
     const sexton = role === "bury";
+    const farmer = role === "farm";
+    const herder = role === "tend" || role === "swine";
     const builder = role === "build";
     const crafter = role === "craft";
-    const hammering = this.state === "building" || this.state === "crafting";
+    const hammering = this.state === "building" || this.state === "crafting" || (this.state === "farming" && (this.farmTask?.type === "sow" || this.farmTask?.type === "reap")); // la houe qui frappe la terre
 
     if (selected) {
       g.strokeStyle = `rgba(255,214,64,${0.75 + 0.25 * Math.sin(t / 200)})`;
@@ -2057,7 +2340,7 @@ export class Worker {
       g.restore();
     }
     // marteau : il frappe en avant quand il construit ou travaille à l'atelier
-    if (builder || crafter) {
+    if (builder || crafter || farmer) {
       const hit = hammering ? Math.max(0, Math.sin(this.timer * 10)) : 0;
       g.save();
       g.translate(r * 0.2, r * 0.95);
@@ -2074,7 +2357,7 @@ export class Worker {
       g.restore();
     }
     // corps : chemise de la couleur du personnage, flanelle rouge à carreaux (bûcheron) ou chemise claire à bretelles (porteur)
-    g.fillStyle = lumberjack ? "#b5372b" : hauler ? "#e8dcc0" : builder ? "#c9772e" : crafter ? "#8a5a3a" : carrier ? "#4a90c8" : hunter ? "#7a5a34" : keeper ? "#efe6c8" : gatherer ? "#7a5aa8" : healer ? "#f1ece0" : sexton ? "#33343c" : shirt;
+    g.fillStyle = lumberjack ? "#b5372b" : hauler ? "#e8dcc0" : builder ? "#c9772e" : crafter ? "#8a5a3a" : carrier ? "#4a90c8" : hunter ? "#7a5a34" : keeper ? "#efe6c8" : gatherer ? "#7a5aa8" : healer ? "#f1ece0" : sexton ? "#33343c" : farmer ? "#4c7ab8" : herder ? "#7fa6c9" : shirt;
     g.beginPath();
     g.ellipse(0, 0, r * 0.62, r * 0.98, 0, 0, Math.PI * 2);
     g.fill();
@@ -2094,6 +2377,25 @@ export class Worker {
         g.stroke();
       }
       g.restore();
+    } else if (herder) {
+      // tablier blanc sur une chemise bleue
+      g.fillStyle = "#f4f0e4";
+      g.fillRect(-r * 0.32, -r * 0.45, r * 0.64, r * 1.1);
+      g.strokeStyle = "#8a9bb0";
+      g.lineWidth = 2;
+      g.strokeRect(-r * 0.32, -r * 0.45, r * 0.64, r * 1.1);
+    } else if (farmer) {
+      // salopette de toile sur une chemise à carreaux
+      g.fillStyle = "#e8d9b4";
+      g.fillRect(-r * 0.5, -r * 0.55, r * 1.0, r * 0.3);
+      g.strokeStyle = "#35588a";
+      g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(-r * 0.3, -r * 0.55);
+      g.lineTo(-r * 0.3, r * 0.6);
+      g.moveTo(r * 0.3, -r * 0.55);
+      g.lineTo(r * 0.3, r * 0.6);
+      g.stroke();
     } else if (sexton) {
       // grande robe noire avec un col blanc
       g.fillStyle = "#f2efe6";
@@ -2177,6 +2479,31 @@ export class Worker {
           g.fillStyle = "#f2c35a";
           g.beginPath();
           g.arc(-r * 1.04, ly - r * 0.05, r * 0.09, 0, Math.PI * 2);
+          g.fill();
+          continue;
+        }
+        if (this.data.cargo === "milk") {
+          // une bouteille de lait
+          g.fillStyle = "#f6f4ee";
+          g.beginPath();
+          g.roundRect(-r * 1.12, ly - r * 0.2, r * 0.26, r * 0.4, r * 0.06);
+          g.fill();
+          g.strokeStyle = "#8a97a8";
+          g.lineWidth = 1.5;
+          g.stroke();
+          g.fillStyle = "#5a86c0";
+          g.fillRect(-r * 1.12, ly - r * 0.28, r * 0.26, r * 0.1);
+          continue;
+        }
+        if (this.data.cargo && this.data.cargo in FARM_CROPS) {
+          // un panier de récolte, de la couleur de la culture
+          g.fillStyle = "#8a5a2e";
+          g.beginPath();
+          g.arc(-r * 1.0, ly, r * 0.22, 0, Math.PI * 2);
+          g.fill();
+          g.fillStyle = { wheat: "#e8c24e", corn: "#f2d03a", tomato: "#d93b2b", carrot: "#f08a24", grass: "#5fbf4a" }[this.data.cargo as FarmCrop];
+          g.beginPath();
+          g.arc(-r * 1.0, ly, r * 0.15, 0, Math.PI * 2);
           g.fill();
           continue;
         }
@@ -2299,6 +2626,44 @@ export class Worker {
       g.beginPath();
       g.arc(-r * 0.02, 0, r * 0.15, 0, Math.PI * 2);
       g.fill();
+    } else if (herder) {
+      // casquette plate marron
+      g.fillStyle = "rgba(40,30,10,0.25)";
+      g.beginPath();
+      g.arc(r * 0.05, r * 0.08, r * 0.64, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = "#7a5a3a";
+      g.beginPath();
+      g.arc(0, 0, r * 0.62, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = "#5a3f26";
+      g.beginPath();
+      g.arc(r * 0.22, 0, r * 0.34, 0, Math.PI * 2);
+      g.fill();
+    } else if (farmer) {
+      // grand chapeau de paille à ruban bleu
+      g.fillStyle = "rgba(40,30,10,0.25)";
+      g.beginPath();
+      g.arc(r * 0.05, r * 0.08, r * 0.86, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = "#ecc96a";
+      g.beginPath();
+      g.arc(0, 0, r * 0.84, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = "#b08a3a";
+      g.lineWidth = 2;
+      g.beginPath();
+      g.arc(0, 0, r * 0.84, 0, Math.PI * 2);
+      g.stroke();
+      g.fillStyle = "#d9b150";
+      g.beginPath();
+      g.arc(0, 0, r * 0.44, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = "#35588a";
+      g.lineWidth = 3;
+      g.beginPath();
+      g.arc(0, 0, r * 0.46, 0, Math.PI * 2);
+      g.stroke();
     } else if (sexton) {
       // chapeau noir à bord plat
       g.fillStyle = "rgba(40,30,10,0.25)";
@@ -2485,6 +2850,33 @@ export class Worker {
       g.arc(0, 0, r * 0.4, 0, Math.PI * 2);
       g.stroke();
     }
+    // thème viking : un bouclier rond dans le dos, et une barbe pour les hommes
+    if (isViking()) {
+      g.fillStyle = "#a8322d";
+      g.beginPath();
+      g.arc(-r * 0.78, 0, r * 0.46, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = "#2a1a10";
+      g.lineWidth = 2;
+      g.stroke();
+      g.fillStyle = "#c9a23c";
+      g.beginPath();
+      g.arc(-r * 0.78, 0, r * 0.17, 0, Math.PI * 2);
+      g.fill();
+      if (!this.fem) {
+        g.fillStyle = "#c28a42";
+        g.beginPath();
+        g.ellipse(r * 0.66, 0, r * 0.2, r * 0.3, 0, 0, Math.PI * 2);
+        g.fill();
+      } else {
+        g.strokeStyle = "#d8a84a"; // une longue tresse dans le dos
+        g.lineWidth = 3;
+        g.beginPath();
+        g.moveTo(-r * 0.3, 0);
+        g.quadraticCurveTo(-r * 1.1, r * 0.35, -r * 1.35, r * 0.1);
+        g.stroke();
+      }
+    }
     // un petit nez dépasse du chapeau pour montrer où il regarde
     g.fillStyle = "#e9b98c";
     g.beginPath();
@@ -2511,7 +2903,7 @@ export class Worker {
     if (role !== "none") {
       g.font = "20px sans-serif";
       g.textAlign = "center";
-      g.fillText(lumberjack ? "🪓" : builder ? "🔨" : crafter ? "🛠️" : carrier ? "💧" : hunter ? "🏹" : keeper ? "🐝" : gatherer ? "🫐" : healer ? "🩺" : sexton ? "⚰️" : "📦", px, py - r * 1.5);
+      g.fillText(lumberjack ? "🪓" : builder ? "🔨" : crafter ? "🛠️" : carrier ? "💧" : hunter ? "🏹" : keeper ? "🐝" : gatherer ? "🫐" : healer ? "🩺" : sexton ? "⚰️" : farmer ? "🌾" : herder ? "🥛" : "📦", px, py - r * 1.5);
     }
     if (selected) {
       g.font = "bold 15px 'Trebuchet MS', sans-serif";

@@ -8,7 +8,7 @@
     :root { --ink:#4a3b2a; --paper:#fff6e0; --accent:#f2b134; }
     html, body { margin:0; height:100%; background:#0e5087; overflow:hidden; font-family: "Trebuchet MS", system-ui, sans-serif; color:var(--ink); }
     #game { position:fixed; inset:0; width:100%; height:100%; display:block; touch-action:none; cursor:pointer; }
-    .hud { position:fixed; top:12px; left:12px; display:flex; gap:8px; pointer-events:none; }
+    .hud { position:fixed; top:12px; left:12px; display:flex; flex-wrap:wrap; gap:8px; max-width:calc(100vw - 250px); pointer-events:none; }
     .pill { background:var(--paper); border:3px solid var(--ink); border-radius:999px; padding:6px 14px; font-weight:700; box-shadow:0 3px 0 rgba(0,0,0,.2); }
     #goods { display:flex; gap:8px; }
     [hidden] { display:none !important; }
@@ -40,6 +40,27 @@
     .modal .meter i.full { background:#d6503c; }
     .modal .good { color:#2f6e3a; font-weight:700; }
     .modal .bad { color:#b8402e; font-weight:700; }
+    @media (prefers-reduced-motion: reduce) { .modal, .modal * { animation:none !important; } }
+    .modal .helpBox { max-width:1000px; height:min(680px, calc(100vh - 32px)); }
+    .modal .helpBody { display:flex; flex:1; min-height:0; }
+    .modal #helpNav { width:230px; flex:0 0 auto; overflow:auto; padding:8px 8px 12px; border-right:2px dashed rgba(74,59,42,.3); display:flex; flex-direction:column; gap:4px; }
+    .modal #helpNav h4 { margin:10px 6px 2px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; opacity:.55; }
+    .modal #helpNav button { font:inherit; font-weight:700; text-align:left; padding:7px 10px; border:2px solid transparent; border-radius:10px; background:none; cursor:pointer; }
+    .modal #helpNav button:hover { background:rgba(143,190,90,.25); }
+    .modal #helpNav button.on { background:#d9eebb; border-color:var(--ink); }
+    .modal #helpArt { flex:1; overflow:auto; padding:14px 22px 22px; line-height:1.55; font-size:15px; animation:itemIn .2s ease-out; }
+    .modal #helpArt h2 { display:flex; align-items:center; gap:12px; margin:0 0 10px; font-size:24px; }
+    .modal #helpArt canvas { width:64px; height:64px; border:3px solid var(--ink); border-radius:12px; background:#a3ca63; flex:0 0 auto; }
+    .modal #helpArt p { margin:0 0 9px; }
+    .modal #helpArt ul { margin:0 0 9px; padding-left:22px; }
+    .modal #helpArt li { margin:3px 0; }
+    .modal #helpArt b { color:#2f6e3a; }
+    @media (max-width:640px) { .modal .helpBody { flex-direction:column; } .modal #helpNav { width:auto; flex-direction:row; flex-wrap:wrap; border-right:0; border-bottom:2px dashed rgba(74,59,42,.3); max-height:38%; } #helpBtn { right:104px; } }
+    #lostBanner { position:fixed; top:64px; left:50%; transform:translateX(-50%); z-index:30; font-weight:700; background:#f1d3c4; }
+    .modal #lostBody p { margin:0 0 4px; line-height:1.5; }
+    .modal #lostBody .lostBig { font-size:20px; font-weight:700; }
+    .modal #lostBody .lostTip { font-size:13px; opacity:.7; }
+    .modal #lostBody .lostRow { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
     .modal .menuBox { max-width:430px; }
     .modal .mList { display:flex; flex-direction:column; gap:9px; padding:14px 16px 16px; overflow:auto; }
     .modal .mRow { display:flex; align-items:center; gap:12px; font-weight:700; }
@@ -57,6 +78,29 @@
     .modal .mHelp b { color:#2f6e3a; }
     .modal .mNote { font-size:12px; opacity:.6; text-align:center; }
     @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+    #campMenu .mPlots { display:grid; grid-template-columns:repeat(4,1fr); gap:4px; }
+    #campMenu .mPlot { position:relative; display:flex; flex-direction:column; align-items:center; border:2px solid var(--ink); border-radius:8px; background:#e9f3d6; padding:3px 0 2px; font-size:11px; font-weight:700; line-height:1.15; }
+    #campMenu .mPlot.empty { background:#eee6d2; opacity:.7; }
+    #campMenu .mPlot.ripe { background:#f7e49a; }
+    #campMenu .mPlot.dry { background:#f2d8c0; }
+    #campMenu .mPlot { cursor:pointer; }
+    #campMenu .mPlot:hover { filter:brightness(.94); transform:translateY(-1px); }
+    #campMenu .mPlotNext { position:absolute; bottom:-6px; right:-2px; font-size:10px; background:#fffdf4; border:1.5px solid var(--ink); border-radius:6px; padding:0 2px; }
+    #campMenu .mPlotIcon { font-size:15px; }
+    #campMenu .mPlotDrop { position:absolute; top:-6px; right:-4px; font-size:11px; }
+    #campMenu .mPlot.sel { outline:3px solid #2f6e3a; outline-offset:1px; }
+    #campMenu .mPick { display:flex; flex-direction:column; gap:6px; padding:8px; border:3px solid var(--ink); border-radius:12px; background:#fffdf4; animation:itemIn .22s ease-out; }
+    #campMenu .mPickTitle { font-weight:700; font-size:15px; }
+    #campMenu .mCropBtn { display:flex; flex-direction:column; align-items:center; line-height:1.2; }
+    #campMenu .mCropSub { font-size:11px; font-weight:600; opacity:.65; }
+    #campMenu .mAllRow { display:flex; align-items:center; gap:6px; }
+    #campMenu .mAllLabel { font-size:13px; font-weight:700; flex:1; }
+    #campMenu .mAllBtn { font:inherit; font-size:18px; padding:2px 10px; border:3px solid var(--ink); border-radius:10px; background:#fffdf4; cursor:pointer; }
+    #campMenu .mAllBtn:hover { background:#f1f6df; }
+    #campMenu .mCrops { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+    #campMenu .mCropBtn { font:inherit; font-weight:700; padding:7px 6px; border:3px solid var(--ink); border-radius:12px; background:#fffdf4; cursor:pointer; }
+    #campMenu .mCropBtn:hover { background:#f1f6df; }
+    #campMenu .mCropBtn.on { background:#d9eebb; }
     @keyframes menuIn { from { opacity:0; transform:translateX(32px) scale(.94); } to { opacity:1; transform:none; } }
     @keyframes menuOut { to { opacity:0; transform:translateX(28px) scale(.95); } }
     @keyframes itemIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
@@ -87,6 +131,7 @@
     #toast.hide { animation:toastOut .25s ease-in both; }
     #cellInfo { animation:tipIn .14s ease-out; }
     #menuBtn { position:fixed; top:12px; right:12px; font-weight:700; }
+    #helpBtn { position:fixed; top:12px; right:112px; font-weight:700; }
     #minimap { position:fixed; bottom:12px; left:12px; width:180px; height:180px; border:3px solid var(--ink); border-radius:14px; box-shadow:0 3px 0 rgba(0,0,0,.25); cursor:crosshair; background:#0e5087; touch-action:none; opacity:.5; transition:opacity .2s; }
     #minimap:hover { opacity:1; }
     #calendar { position:fixed; left:12px; bottom:206px; width:186px; box-sizing:border-box; background:var(--paper); border:3px solid var(--ink); border-radius:14px; padding:6px 10px 7px; box-shadow:0 3px 0 rgba(0,0,0,.25); display:flex; flex-direction:column; gap:3px; pointer-events:auto; opacity:.55; transition:opacity .2s; }
@@ -180,6 +225,61 @@
     .piece.locked { opacity:.45; filter:grayscale(.7); }
     .piece.poor small { color:#b3261e; font-weight:700; }
 
+
+    /* ====== THÈME VIKING (html[data-theme="viking"]) : bois sombre, parchemin, fer et or ; le thème classique n'est pas touché ====== */
+    html[data-theme="viking"] { --ink:#2a1a10; --paper:#e6d6b0; --accent:#d2a13a; }
+    html[data-theme="viking"], html[data-theme="viking"] body { background:#0b3b62; font-family:"Palatino Linotype","Book Antiqua",Palatino,Cambria,Georgia,serif; letter-spacing:.15px; }
+    html[data-theme="viking"] #game { filter:saturate(.84) sepia(.07) brightness(.97) contrast(1.03); } /* le monde, un peu plus nordique : couleurs moins vives */
+    html[data-theme="viking"] #loading { background:#0b3b62; font-variant:small-caps; letter-spacing:2px; }
+    html[data-theme="viking"] .pill,
+    html[data-theme="viking"] .round,
+    html[data-theme="viking"] #cellInfo,
+    html[data-theme="viking"] #toast,
+    html[data-theme="viking"] #calendar,
+    html[data-theme="viking"] #campMenu,
+    html[data-theme="viking"] .modal .modalBox {
+      border-color:#2a1a10;
+      background-image: repeating-linear-gradient(90deg, rgba(60,35,10,.05) 0 2px, rgba(255,255,255,.03) 2px 5px), linear-gradient(#ecdcb6, #d6c397);
+      box-shadow: 0 3px 0 rgba(0,0,0,.5), inset 0 0 0 2px rgba(120,76,40,.55);
+    }
+    html[data-theme="viking"] .pill { border-radius:10px; }
+    html[data-theme="viking"] .round { border-radius:8px; }
+    html[data-theme="viking"] .round.on, html[data-theme="viking"] .round.sel { background-image:linear-gradient(#e6bd55,#c99a31); }
+    html[data-theme="viking"] .round:hover:not(:disabled) { box-shadow:0 5px 0 rgba(0,0,0,.5), inset 0 0 0 2px rgba(120,76,40,.55); }
+    html[data-theme="viking"] #cellInfo, html[data-theme="viking"] #toast { border-radius:8px; }
+    html[data-theme="viking"] #calendar, html[data-theme="viking"] #campMenu { border-radius:8px; }
+    html[data-theme="viking"] #minimap { border-radius:8px; border-width:4px; box-shadow:0 3px 0 rgba(0,0,0,.5), inset 0 0 0 2px #7a4e2a; }
+    html[data-theme="viking"] .modal .modalBox { border-width:4px; border-radius:8px; background-color:#e6d6b0; box-shadow:0 8px 0 rgba(0,0,0,.5), inset 0 0 0 3px rgba(120,76,40,.65), inset 0 0 50px rgba(120,76,40,.22); }
+    html[data-theme="viking"] .modal { background:rgba(10,12,20,.6); }
+    html[data-theme="viking"] .modal .modalHead { background:linear-gradient(#5a3a1f,#3b2412); color:#f3e3bd; border-bottom:3px solid #1c1008; border-radius:4px 4px 0 0; text-shadow:0 2px 0 rgba(0,0,0,.5); font-variant:small-caps; letter-spacing:1.5px; }
+    html[data-theme="viking"] .modal .modalHead span:first-child::before { content:"ᚠ ᚢ ᚦ  "; color:#d2a13a; font-size:.75em; letter-spacing:3px; }
+    html[data-theme="viking"] .modal .modalHead .round { color:#2a1a10; text-shadow:none; }
+    html[data-theme="viking"] .modal .modalSub { color:#e7d5ab; opacity:.75; }
+    html[data-theme="viking"] .modal #helpNav button.on { background:#e0b555; }
+    html[data-theme="viking"] .modal #helpArt h2 { font-variant:small-caps; letter-spacing:1px; border-bottom:2px solid rgba(60,35,10,.35); padding-bottom:6px; }
+    html[data-theme="viking"] .modal #helpArt b { color:#8e2a24; }
+    html[data-theme="viking"] .modal #helpArt canvas { background:#7aa04e; border-color:#2a1a10; border-radius:6px; }
+    html[data-theme="viking"] .modal .mBtn { border-radius:8px; background-image:linear-gradient(#efe0bb,#d8c59a); }
+    html[data-theme="viking"] .modal .mBtn.on { background-image:linear-gradient(#e6bd55,#c99a31); }
+    html[data-theme="viking"] #build { background-image:repeating-linear-gradient(90deg, rgba(60,35,10,.06) 0 2px, transparent 2px 6px), linear-gradient(#e6d6b0,#cfba8c); border-top:4px solid #2a1a10; box-shadow:inset 0 3px 0 rgba(120,76,40,.6); }
+    html[data-theme="viking"] .piece { border-radius:8px; background:linear-gradient(#f1e4c2,#dccb9f); box-shadow:0 3px 0 rgba(0,0,0,.4); }
+    html[data-theme="viking"] .piece.sel { background:linear-gradient(#e8c25f,#cfa23c); }
+    html[data-theme="viking"] #campMenu .menuBar, html[data-theme="viking"] .modal .meter { border-radius:5px; background:#3b2a1a; }
+    html[data-theme="viking"] #campMenu .menuBar i { background:#8aa84e; border-radius:2px; }
+    html[data-theme="viking"] #campMenu .menuBar i.full, html[data-theme="viking"] .modal .meter i.full { background:#a8322d; }
+    html[data-theme="viking"] .modal .meter i { background:#8aa84e; }
+    html[data-theme="viking"] #campMenu .mTitle { font-variant:small-caps; letter-spacing:1.2px; font-size:20px; }
+    html[data-theme="viking"] #campMenu .mHead { border-bottom:2px solid rgba(60,35,10,.45); }
+    html[data-theme="viking"] #campMenu .mChip { border-radius:6px; }
+    html[data-theme="viking"] #campMenu .mChip.ok { color:#2c5a24; background:#dde8c2; border-color:#7f9a4a; }
+    html[data-theme="viking"] #campMenu .mChip.bad { color:#8e2a24; background:#f1d3c4; border-color:#b8604f; }
+    html[data-theme="viking"] #calendar .calBar { border-radius:4px; background:#3b2a1a; }
+    html[data-theme="viking"] #calendar .calBar i { background:#d2a13a; }
+    html[data-theme="viking"] .modal th { background:#d6c397; }
+    html[data-theme="viking"] .modal tbody tr:hover { background:rgba(210,161,58,.28); }
+    html[data-theme="viking"] .modal tr.sick { background:rgba(168,50,45,.14); }
+    html[data-theme="viking"] .modal .good { color:#3c6a2a; }
+    html[data-theme="viking"] .modal .bad { color:#8e2a24; }
   </style>
 </head>
 <body>
@@ -191,6 +291,7 @@
     <span id="goods"></span>
   </div>
   <button id="menuBtn" class="round" title="Menu (Échap)">☰ Menu</button>
+  <button id="helpBtn" class="round" title="Guide du jeu (H)">❓ Aide</button>
   <div id="calendar">
     <div class="calTop"><span class="calSeason"><span id="seasonIcon">🌸</span> <span id="seasonName">Printemps</span></span><span class="calTime"><span id="clockIcon">☀️</span> <span id="clock">08:00</span></span></div>
     <div class="calDate" id="calDate">Jour 1 · année 1</div>
@@ -206,6 +307,19 @@
     <div class="modalBox">
       <div class="modalHead"><span>👥 Villageois</span><span class="modalSub" id="folkSub"></span><button id="folkClose" class="round">✕ Fermer</button></div>
       <div class="modalBody" id="folkBody"></div>
+    </div>
+  </div>
+  <div id="lostModal" class="modal" hidden>
+    <div class="modalBox menuBox">
+      <div class="modalHead"><span>☠️ Partie perdue</span></div>
+      <div class="mList" id="lostBody"></div>
+    </div>
+  </div>
+  <button id="lostBanner" class="round" hidden>☠️ Partie perdue · cliquer pour recommencer</button>
+  <div id="helpModal" class="modal" hidden>
+    <div class="modalBox helpBox">
+      <div class="modalHead"><span>📖 Guide du jeu</span><span class="modalSub" id="helpSub">Comment faire, bâtiment par bâtiment</span><button id="helpClose" class="round">✕ Fermer</button></div>
+      <div class="helpBody"><nav id="helpNav"></nav><article id="helpArt"></article></div>
     </div>
   </div>
   <div id="menuModal" class="modal" hidden>

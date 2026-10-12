@@ -2,7 +2,7 @@
 // Les chemins posés par les joueurs sont préférés (on y marche plus vite). Les diagonales ne coupent pas les angles.
 // En mode « chemin seulement », on ne marche que sur des cases de chemin, en ligne droite (pas de diagonale).
 import { GRID } from "./config";
-import { Save, roadAt, walkable } from "./state";
+import { Save, roadAt, walkableByPeople as walkable } from "./state";
 
 type Cell = { gx: number; gy: number };
 
@@ -95,7 +95,7 @@ export function findPath(s: Save, from: Cell, target: Cell, roadOnly = false, av
   const ok = (x: number, y: number) => x >= 0 && y >= 0 && x < GRID && y < GRID && walk[y * GRID + x] === 1;
 
   const idx = (c: Cell) => c.gy * GRID + c.gx;
-  const best = new Float32Array(GRID * GRID).fill(Infinity);
+  const best = new Float64Array(GRID * GRID).fill(Infinity); // en double : en simple précision, des chemins de même coût se re-parcouraient à l'infini
   const prev = new Int32Array(GRID * GRID).fill(-1);
   const heap = new Heap();
   const h = (gx: number, gy: number) => Math.hypot(gx - to.gx, gy - to.gy) * ROAD_COST;
@@ -115,7 +115,7 @@ export function findPath(s: Save, from: Cell, target: Cell, roadOnly = false, av
     const visit = (nx: number, ny: number, cost: number) => {
       const n = ny * GRID + nx;
       const g1 = g0 + cost * (road[n] ? ROAD_COST : 1);
-      if (g1 < best[n]) {
+      if (g1 < best[n] - 1e-9) {
         best[n] = g1;
         prev[n] = cur;
         heap.push(g1 + h(nx, ny), n);

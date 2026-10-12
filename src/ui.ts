@@ -1,5 +1,6 @@
 // Interface HTML : message passager et barre de construction (camps, dépôts, chemins).
 import { drawStructureThumb } from "./draw";
+import { tl } from "./theme";
 import { STRUCTURE_LIST, STRUCTURES } from "./structures";
 import { Save } from "./state";
 
@@ -55,7 +56,7 @@ export class BuildUI {
       b.className = "piece";
       b.appendChild(thumb(def.id));
       const name = document.createElement("span");
-      name.textContent = def.label;
+      name.textContent = tl(def.label);
       const price = document.createElement("small");
       b.append(name, price);
       b.addEventListener("click", () => this.h.onSelect(this.view().selected === def.id ? null : def.id));

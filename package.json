@@ -1,10 +1,10 @@
 {
   "name": "ferme-2d-plat",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port 5175",
+    "dev": "vite --host 127.0.0.1 --port 5175",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "electron": "npm run build && electron .",
