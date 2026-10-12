@@ -1,7 +1,7 @@
 {
   "name": "ferme-2d-plat",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite --port 5175",
@@ -47,7 +47,8 @@
       {
         "provider": "github",
         "owner": "jo59240",
-        "repo": "jeu"
+        "repo": "jeu",
+        "releaseType": "release"
       }
     ]
   }
