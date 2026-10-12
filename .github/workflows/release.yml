@@ -1,0 +1,22 @@
+# Publie une version : on pousse une étiquette (git tag v0.2.0 && git push --tags),
+# GitHub construit l'installeur Windows et le dépose dans « Releases » ; les jeux déjà installés se mettent à jour tout seuls.
+name: Publier une version
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

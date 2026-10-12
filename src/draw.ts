@@ -1,0 +1,1527 @@
+// Dessin vectoriel vu de dessus : aplats de couleur, ombres douces, champs rayés, camps, dépôts et chemins.
+import { CROP_BY_ID, stageOf } from "./crops";
+import { Cell, Port, SHIP_ARRIVE, SHIP_CYCLE, SHIP_DEPART, SHIP_DOCKED, SHIP_GONE, growth } from "./state";
+import { STRUCTURES } from "./structures";
+
+export const C = 64; // pixels du monde par case
+
+// ---------- cases et cultures ----------
+
+// L'herbe est dessinée par la carte : une case ne se dessine ici que si elle est labourée ou cultivée.
+export function drawTile(g: CanvasRenderingContext2D, gx: number, gy: number, cell: Cell, now: number, hot: boolean, erase: boolean, buildable = true) {
+  const x = gx * C;
+  const y = gy * C;
+  const pad = 1.5;
+  if (cell.kind !== 'grass') {
+    g.fillStyle = '#9a6a40';
+    g.fillRect(x + pad, y + pad, C - 2 * pad, C - 2 * pad);
+    g.fillStyle = '#845630';
+    for (let i = 0; i < 5; i++) g.fillRect(x + 6, y + 8 + i * 11, C - 12, 3.5);
+    if (cell.kind === 'crop') drawCrop(g, x, y, cell.crop, stageOf(growth(cell, now)), growth(cell, now));
+  }
+  if (hot) {
+    const bad = !buildable;
+    g.fillStyle = erase || bad ? 'rgba(230,80,80,0.35)' : 'rgba(255,255,255,0.3)';
+    g.fillRect(x + pad, y + pad, C - 2 * pad, C - 2 * pad);
+    g.strokeStyle = erase || bad ? '#d94444' : 'rgba(255,255,255,0.95)';
+    g.lineWidth = 2;
+    g.strokeRect(x + 3, y + 3, C - 6, C - 6);
+  }
+}
+
+// Cinq rangs par case ; le stade change la couleur et la densité des rangs.
+function drawCrop(g: CanvasRenderingContext2D, x: number, y: number, crop: string, stage: number, progress: number) {
+  const id = CROP_BY_ID[crop]?.id ?? "carrot";
+  const rowColor = {
+    carrot: ["#8fc069", "#5f9f43", "#3f8a35"],
+    potato: ["#9cc873", "#74b04f", "#5aa044"],
+    wheat: ["#b9cf6d", "#d3c25b", "#e6bf45"],
+    tomato: ["#86bd62", "#4f9a3d", "#2f7d34"],
+  }[id as "carrot"];
+  const dotColor = { carrot: "#f08a24", potato: "#f6f2d4", wheat: "#f0d26a", tomato: "#d93b2b" }[id as "carrot"];
+  for (let i = 0; i < 5; i++) {
+    const ry = y + 9 + i * 11;
+    g.fillStyle = rowColor[stage];
+    if (stage === 0) {
+      for (let k = 0; k < 6; k++) {
+        g.beginPath();
+        g.arc(x + 10 + k * 9, ry + 2, 2.4 + progress * 2, 0, Math.PI * 2);
+        g.fill();
+      }
+    } else {
+      g.beginPath();
+      g.roundRect(x + 7, ry - 1, C - 14, stage === 1 ? 5.5 : 7.5, 3);
+      g.fill();
+      if (stage === 2) {
+        g.fillStyle = dotColor;
+        for (let k = 0; k < 5; k++) {
+          g.beginPath();
+          g.arc(x + 12 + k * 10, ry + 2.5, 2.3, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
+    }
+  }
+}
+
+// Dessine un bâtiment carré de `size` cases tourné de rot quarts de tour autour de son centre.
+function rotated(g: CanvasRenderingContext2D, gx: number, gy: number, size: number, rot: number, draw: () => void) {
+  if (!rot) return draw();
+  const cx = (gx + size / 2) * C;
+  const cy = (gy + size / 2) * C;
+  g.save();
+  g.translate(cx, cy);
+  g.rotate(((rot % 4) * Math.PI) / 2);
+  g.translate(-cx, -cy);
+  draw();
+  g.restore();
+}
+
+export function drawCamp(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0) {
+  rotated(g, gx, gy, 2, rot, () => campBody(g, gx, gy));
+}
+
+export function drawDepot(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, level = 1) {
+  rotated(g, gx, gy, 3, rot, () => depotBody(g, gx, gy, level));
+}
+
+// smoke : quelqu'un est à l'intérieur, une fumée sort de la cheminée (elle monte toujours vers le haut, quelle que soit l'orientation).
+export function drawHouse(g: CanvasRenderingContext2D, gx: number, gy: number, smoke: boolean, t: number, rot = 0) {
+  rotated(g, gx, gy, 2, rot, () => houseBody(g, gx, gy));
+  if (!smoke) return;
+  let vx = 2 * C * 0.7 - C;
+  let vy = 2 * C * 0.18 - C;
+  for (let i = 0; i < rot % 4; i++) [vx, vy] = [-vy, vx];
+  const cx = (gx + 1) * C + vx;
+  const cy = (gy + 1) * C + vy;
+  for (let i = 0; i < 5; i++) {
+    const p = (t / 2600 + i / 5) % 1;
+    g.fillStyle = `rgba(235,235,235,${0.65 * (1 - p)})`;
+    g.beginPath();
+    g.arc(cx + p * 22 + Math.sin(p * 7 + i) * 4, cy - 6 - p * 56, 5 + p * 10, 0, Math.PI * 2);
+    g.fill();
+  }
+}
+
+// Scierie (3 × 3 cases), vue de dessus : hangar à toit de planches, tas de bûches, scie circulaire sur son établi et pile de planches.
+// working : la lame tourne et de la sciure vole.
+export function drawSawmill(g: CanvasRenderingContext2D, gx: number, gy: number, working: boolean, t: number, rot = 0) {
+  rotated(g, gx, gy, 3, rot, () => sawmillBody(g, gx, gy));
+  // la lame, elle, est dessinée à part : elle tourne sur place, quelle que soit l'orientation
+  const w = 3 * C;
+  let vx = w * 0.32 - w / 2;
+  let vy = w * 0.74 - w / 2;
+  for (let i = 0; i < rot % 4; i++) [vx, vy] = [-vy, vx];
+  const cx = gx * C + w / 2 + vx;
+  const cy = gy * C + w / 2 + vy;
+  const a = working ? t / 60 : 0.4;
+  g.save();
+  g.translate(cx, cy);
+  g.rotate(a);
+  g.fillStyle = "#cfd3d8";
+  g.beginPath();
+  for (let k = 0; k < 16; k++) {
+    const ang = (k / 16) * Math.PI * 2;
+    g.lineTo(Math.cos(ang) * 22, Math.sin(ang) * 22);
+    g.lineTo(Math.cos(ang + 0.2) * 17, Math.sin(ang + 0.2) * 17);
+  }
+  g.closePath();
+  g.fill();
+  g.strokeStyle = "#8b9099";
+  g.lineWidth = 2;
+  g.stroke();
+  g.fillStyle = "#6f7480";
+  g.beginPath();
+  g.arc(0, 0, 5, 0, Math.PI * 2);
+  g.fill();
+  g.restore();
+  if (working) {
+    // sciure
+    for (let i = 0; i < 6; i++) {
+      const p = (t / 700 + i / 6) % 1;
+      g.fillStyle = `rgba(226,196,140,${0.8 * (1 - p)})`;
+      g.beginPath();
+      g.arc(cx + 18 + p * 26 + Math.sin(i * 5) * 4, cy - 6 + Math.sin(p * 6 + i) * 8, 2.4 * (1 - p) + 0.8, 0, Math.PI * 2);
+      g.fill();
+    }
+  }
+}
+
+function sawmillBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  const x = gx * C;
+  const y = gy * C;
+  const w = 3 * C;
+  // seuil de l'entrée : tapis de terre sous la porte (la case d'entrée est juste en dessous, au milieu)
+  g.fillStyle = "#c9a96e";
+  g.beginPath();
+  g.roundRect(x + C + 8, y + w - 6, C - 16, 24, 8);
+  g.fill();
+  // cour piétinée
+  g.fillStyle = "#b79a63";
+  g.beginPath();
+  g.roundRect(x + 3, y + 3, w - 6, w - 6, 24);
+  g.fill();
+  g.strokeStyle = "#9c8049";
+  g.lineWidth = 2;
+  g.stroke();
+  // hangar : toit de planches (en haut à gauche)
+  g.fillStyle = "rgba(40,30,10,0.28)";
+  g.fillRect(x + 20, y + 20, w * 0.62, w * 0.44);
+  g.fillStyle = "#8a6a46";
+  g.fillRect(x + 14, y + 14, w * 0.62, w * 0.44);
+  g.strokeStyle = "#6e5234";
+  g.lineWidth = 2;
+  g.beginPath();
+  for (let k = 1; k < 9; k++) {
+    g.moveTo(x + 14 + (k * w * 0.62) / 9, y + 14);
+    g.lineTo(x + 14 + (k * w * 0.62) / 9, y + 14 + w * 0.44);
+  }
+  g.stroke();
+  g.strokeStyle = "#5a4129";
+  g.lineWidth = 5;
+  g.beginPath();
+  g.moveTo(x + 14, y + 14 + w * 0.22);
+  g.lineTo(x + 14 + w * 0.62, y + 14 + w * 0.22);
+  g.stroke();
+  g.strokeStyle = "#5a4129";
+  g.lineWidth = 3;
+  g.strokeRect(x + 14, y + 14, w * 0.62, w * 0.44);
+  // tas de bûches (en haut à droite) : quatre troncs couchés
+  for (let i = 0; i < 4; i++) {
+    const ly = y + 22 + i * 22;
+    g.fillStyle = "rgba(30,20,10,0.3)";
+    g.fillRect(x + w - 74, ly + 4, 58, 18);
+    g.fillStyle = i % 2 ? "#8a5a2e" : "#9a6a3a";
+    g.beginPath();
+    g.roundRect(x + w - 78, ly, 58, 18, 9);
+    g.fill();
+    g.fillStyle = "#d9b27a";
+    g.beginPath();
+    g.arc(x + w - 26, ly + 9, 6, 0, Math.PI * 2);
+    g.fill();
+  }
+  // établi de la scie (en bas à gauche) : la lame est dessinée par drawSawmill
+  g.fillStyle = "rgba(40,30,10,0.3)";
+  g.fillRect(x + 20, y + w * 0.62 + 6, 92, 54);
+  g.fillStyle = "#a8825a";
+  g.fillRect(x + 14, y + w * 0.62, 92, 54);
+  g.strokeStyle = "#7a5a34";
+  g.lineWidth = 3;
+  g.strokeRect(x + 14, y + w * 0.62, 92, 54);
+  // pile de planches (en bas à droite)
+  for (let i = 0; i < 5; i++) {
+    g.fillStyle = "rgba(40,30,10,0.25)";
+    g.fillRect(x + w - 92, y + w * 0.64 + i * 9 + 3, 70, 8);
+    g.fillStyle = i % 2 ? "#e0c08a" : "#d2ae72";
+    g.fillRect(x + w - 96, y + w * 0.64 + i * 9, 70, 8);
+    g.strokeStyle = "#9c7a44";
+    g.lineWidth = 1;
+    g.strokeRect(x + w - 96, y + w * 0.64 + i * 9, 70, 8);
+  }
+}
+
+// Rucher (2 × 2 cases) : quatre ruches en paille sur leur socle, dans un enclos de piquets, entourées de fleurs.
+// active : les abeilles butinent autour des ruches.
+export function drawApiary(g: CanvasRenderingContext2D, gx: number, gy: number, active: boolean, t: number, rot = 0) {
+  rotated(g, gx, gy, 2, rot, () => apiaryBody(g, gx, gy));
+  if (!active) return;
+  // les abeilles : de petits points qui tournent autour des ruches (elles restent à l'endroit quelle que soit la rotation)
+  const cx = (gx + 1) * C;
+  const cy = (gy + 1) * C;
+  for (let i = 0; i < 9; i++) {
+    const a = t / (380 + i * 40) + i * 1.9;
+    const r = 18 + (i % 3) * 14 + Math.sin(t / 300 + i) * 4;
+    const bx = cx + Math.cos(a) * (r + 12);
+    const by = cy + Math.sin(a * 1.3) * (r * 0.8 + 10);
+    g.fillStyle = "rgba(255,255,255,0.7)";
+    g.beginPath();
+    g.ellipse(bx - 2, by - 3, 3, 1.8, 0.6, 0, Math.PI * 2);
+    g.ellipse(bx + 2, by - 3, 3, 1.8, -0.6, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#f2c230";
+    g.beginPath();
+    g.ellipse(bx, by, 3.4, 2.4, 0, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#3a2a14";
+    g.fillRect(bx - 0.6, by - 2.3, 1.4, 4.6);
+  }
+}
+
+function apiaryBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  const x = gx * C;
+  const y = gy * C;
+  const w = 2 * C;
+  // seuil de l'entrée (la case d'entrée est juste en dessous, côté gauche)
+  g.fillStyle = "#c9a96e";
+  g.beginPath();
+  g.roundRect(x + 10, y + w - 6, 44, 24, 8);
+  g.fill();
+  // pré fleuri
+  g.fillStyle = "#9fcd62";
+  g.beginPath();
+  g.roundRect(x + 3, y + 3, w - 6, w - 6, 22);
+  g.fill();
+  g.strokeStyle = "#7a5a34";
+  g.lineWidth = 3;
+  g.setLineDash([2, 10]);
+  g.lineCap = "round";
+  g.stroke(); // l'enclos : une ligne de piquets
+  g.setLineDash([]);
+  for (const [fx, fy, c] of [[14, 20, "#f6e66a"], [34, 108, "#ffffff"], [102, 18, "#f7a8c4"], [112, 104, "#f6e66a"], [18, 64, "#f7a8c4"], [108, 62, "#ffffff"]] as [number, number, string][]) {
+    g.fillStyle = c;
+    g.beginPath();
+    g.arc(x + fx, y + fy, 4, 0, Math.PI * 2);
+    g.fill();
+  }
+  // quatre ruches : socle de bois, dôme de paille, trou de vol
+  for (const [hx, hy] of [[0.27, 0.27], [0.73, 0.27], [0.27, 0.7], [0.73, 0.7]]) {
+    const cx = x + hx * w;
+    const cy = y + hy * w;
+    g.fillStyle = "rgba(40,30,10,0.28)";
+    g.beginPath();
+    g.ellipse(cx + 4, cy + 6, 24, 20, 0, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#a47c48";
+    g.fillRect(cx - 21, cy - 21, 42, 42);
+    g.strokeStyle = "#7a5a34";
+    g.lineWidth = 2;
+    g.strokeRect(cx - 21, cy - 21, 42, 42);
+    for (let k = 0; k < 4; k++) {
+      g.fillStyle = k % 2 ? "#e6b84a" : "#d9a63a";
+      g.beginPath();
+      g.arc(cx, cy, 19 - k * 4.5, 0, Math.PI * 2);
+      g.fill();
+    }
+    g.strokeStyle = "#9c7424";
+    g.lineWidth = 1.5;
+    g.beginPath();
+    g.arc(cx, cy, 19, 0, Math.PI * 2);
+    g.stroke();
+    g.fillStyle = "#3a2a14";
+    g.beginPath();
+    g.ellipse(cx, cy + 18, 5, 2.4, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+}
+
+// Église (3 × 3 cases) : nef de pierre à toit d'ardoise en croix, clocher carré, et au sud un cimetière clos de murets où s'alignent les tombes.
+export function drawChurch(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, graves = 0) {
+  rotated(g, gx, gy, 3, rot, () => churchBody(g, gx, gy, graves));
+}
+
+function churchBody(g: CanvasRenderingContext2D, gx: number, gy: number, graves: number) {
+  const x = gx * C;
+  const y = gy * C;
+  const w = 3 * C;
+  // seuil de l'entrée (la case d'entrée est juste en dessous, au milieu)
+  g.fillStyle = "#c9a96e";
+  g.beginPath();
+  g.roundRect(x + C + 8, y + w - 6, C - 16, 24, 8);
+  g.fill();
+  // terrain du cimetière : herbe rase, murets
+  g.fillStyle = "#98c36a";
+  g.beginPath();
+  g.roundRect(x + 3, y + 3, w - 6, w - 6, 18);
+  g.fill();
+  g.strokeStyle = "#8d8a80";
+  g.lineWidth = 5;
+  g.stroke();
+  // allée centrale vers la porte
+  g.fillStyle = "#cdbb94";
+  g.fillRect(x + w / 2 - 12, y + 96, 24, w - 96);
+  // tombes : 3 rangées de 6 (l'allée reste libre), remplies dans l'ordre
+  let k = 0;
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 7; col++) {
+      if (col === 3) continue;
+      const tx = x + 16 + col * 26;
+      const ty = y + 106 + row * 24;
+      const filled = k < graves;
+      k++;
+      g.fillStyle = "rgba(40,30,10,0.2)";
+      g.fillRect(tx + 2, ty + 3, 14, 14);
+      g.fillStyle = filled ? "#8b6f4e" : "#a98f6a"; // terre remuée
+      g.fillRect(tx - 1, ty + 10, 16, 9);
+      if (filled) {
+        g.fillStyle = "#b9b8b4";
+        g.beginPath();
+        g.roundRect(tx + 2, ty - 4, 10, 13, [5, 5, 0, 0]);
+        g.fill();
+        g.strokeStyle = "#7a7974";
+        g.lineWidth = 1;
+        g.stroke();
+      }
+    }
+  }
+  // la nef : ombre, toit d'ardoise à deux pans, croisillon
+  const bx = x + 22;
+  const by = y + 14;
+  const bw = w - 44;
+  const bh = 74;
+  g.fillStyle = "rgba(40,30,10,0.28)";
+  g.fillRect(bx + 8, by + 9, bw, bh);
+  g.fillStyle = "#cfc9bc";
+  g.fillRect(bx, by, bw, bh);
+  g.fillStyle = "#6a7587";
+  g.fillRect(bx + 6, by + 6, bw / 2 - 6, bh - 12);
+  g.fillStyle = "#566174";
+  g.fillRect(bx + bw / 2, by + 6, bw / 2 - 6, bh - 12);
+  g.strokeStyle = "#3f4856";
+  g.lineWidth = 3;
+  g.beginPath();
+  g.moveTo(bx + bw / 2, by + 6);
+  g.lineTo(bx + bw / 2, by + bh - 6);
+  g.stroke();
+  g.strokeStyle = "#7a7468";
+  g.lineWidth = 2.5;
+  g.strokeRect(bx, by, bw, bh);
+  // clocher : tour carrée à gauche, avec la cloche
+  const tx = bx - 8;
+  const ty = by - 6;
+  g.fillStyle = "rgba(40,30,10,0.28)";
+  g.fillRect(tx + 6, ty + 7, 38, 38);
+  g.fillStyle = "#dcd6c8";
+  g.fillRect(tx, ty, 38, 38);
+  g.fillStyle = "#4b5566";
+  g.beginPath();
+  g.moveTo(tx + 3, ty + 35);
+  g.lineTo(tx + 19, ty + 3);
+  g.lineTo(tx + 35, ty + 35);
+  g.closePath();
+  g.fill();
+  g.strokeStyle = "#7a7468";
+  g.lineWidth = 2;
+  g.strokeRect(tx, ty, 38, 38);
+  g.fillStyle = "#d9b24a";
+  g.beginPath();
+  g.arc(tx + 19, ty + 21, 5, 0, Math.PI * 2);
+  g.fill();
+  // croix sur le toit de la nef
+  g.fillStyle = "#f2efe6";
+  g.fillRect(bx + bw / 2 - 4, by + 14, 8, 38);
+  g.fillRect(bx + bw / 2 - 15, by + 24, 30, 8);
+  // grande porte au bas de la nef
+  g.fillStyle = "#4e3320";
+  g.fillRect(bx + bw / 2 - 12, by + bh - 4, 24, 12);
+}
+
+// Un défunt allongé sous un linceul, devant sa maison.
+export function drawCorpse(g: CanvasRenderingContext2D, x: number, y: number, color: string) {
+  const px = x * C;
+  const py = y * C;
+  g.fillStyle = "rgba(30,20,10,0.28)";
+  g.beginPath();
+  g.ellipse(px + 3, py + 5, 22, 10, 0.25, 0, Math.PI * 2);
+  g.fill();
+  g.save();
+  g.translate(px, py);
+  g.rotate(0.25);
+  // la tête qui dépasse du linceul
+  g.fillStyle = "#e9b98c";
+  g.beginPath();
+  g.arc(-17, 0, 7, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = color;
+  g.beginPath();
+  g.arc(-18, -2, 5, Math.PI, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#efece4";
+  g.beginPath();
+  g.roundRect(-11, -9, 32, 18, 8);
+  g.fill();
+  g.strokeStyle = "#a9a699";
+  g.lineWidth = 1.5;
+  g.stroke();
+  g.strokeStyle = "rgba(120,115,100,0.6)";
+  g.beginPath();
+  g.moveTo(-2, -9);
+  g.lineTo(-2, 9);
+  g.moveTo(9, -9);
+  g.lineTo(9, 9);
+  g.stroke();
+  g.restore();
+  // un cierge à côté
+  g.fillStyle = "#f4efdc";
+  g.fillRect(px + 22, py - 14, 5, 14);
+  g.fillStyle = "#f2b13a";
+  g.beginPath();
+  g.ellipse(px + 24.5, py - 17, 3, 5, 0, 0, Math.PI * 2);
+  g.fill();
+}
+
+// Maison du soigneur (2 × 2 cases) : petite maison blanche à toit vert, croix claire, jardin d'herbes médicinales.
+export function drawClinic(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0) {
+  rotated(g, gx, gy, 2, rot, () => clinicBody(g, gx, gy));
+}
+
+function clinicBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  const x = gx * C;
+  const y = gy * C;
+  const w = 2 * C;
+  // seuil de l'entrée (la case d'entrée est juste en dessous, côté gauche)
+  g.fillStyle = "#c9a96e";
+  g.beginPath();
+  g.roundRect(x + 10, y + w - 6, 44, 24, 8);
+  g.fill();
+  // cour d'herbe tendre
+  g.fillStyle = "#a9d27a";
+  g.beginPath();
+  g.roundRect(x + 3, y + 3, w - 6, w - 6, 20);
+  g.fill();
+  g.strokeStyle = "#7c9d52";
+  g.lineWidth = 2;
+  g.stroke();
+  // jardin d'herbes : deux plates-bandes
+  for (const [bx, by] of [[10, 86], [74, 86]]) {
+    g.fillStyle = "#7a5a34";
+    g.fillRect(x + bx, y + by, 44, 28);
+    for (let k = 0; k < 5; k++) {
+      g.fillStyle = k % 2 ? "#4f9a4a" : "#6cbb55";
+      g.beginPath();
+      g.arc(x + bx + 6 + k * 8, y + by + 14, 5.5, 0, Math.PI * 2);
+      g.fill();
+    }
+  }
+  // la maison : ombre, murs clairs, toit vert à deux pans
+  const hx = x + 14;
+  const hy = y + 12;
+  const hw = w - 28;
+  const hh = 68;
+  g.fillStyle = "rgba(40,30,10,0.26)";
+  g.fillRect(hx + 7, hy + 8, hw, hh);
+  g.fillStyle = "#f1ead8";
+  g.fillRect(hx, hy, hw, hh);
+  g.fillStyle = "#4f9a6a";
+  g.fillRect(hx, hy, hw / 2, hh - 10);
+  g.fillStyle = "#3e8257";
+  g.fillRect(hx + hw / 2, hy, hw / 2, hh - 10);
+  g.strokeStyle = "#2f6644";
+  g.lineWidth = 3;
+  g.beginPath();
+  g.moveTo(hx + hw / 2, hy);
+  g.lineTo(hx + hw / 2, hy + hh - 10);
+  g.stroke();
+  g.strokeStyle = "#6e6650";
+  g.lineWidth = 2.5;
+  g.strokeRect(hx, hy, hw, hh);
+  // croix claire sur le toit
+  g.fillStyle = "#f6f2e6";
+  g.fillRect(hx + hw / 2 - 5, hy + 8, 10, 34);
+  g.fillRect(hx + hw / 2 - 17, hy + 20, 34, 10);
+  // porte au milieu du bas
+  g.fillStyle = "#6d4527";
+  g.fillRect(hx + hw / 2 - 11, hy + hh - 12, 22, 12);
+}
+
+// Port (3 × 3 cases) : entrepôt à toit bleu, quai de bois qui avance vers l'eau (au nord quand rot = 0), caisses et tonneaux.
+export function drawPort(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0) {
+  rotated(g, gx, gy, 3, rot, () => portBody(g, gx, gy));
+}
+
+function portBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  const x = gx * C;
+  const y = gy * C;
+  const w = 3 * C;
+  // seuil de l'entrée : tapis de terre sous la porte (la case d'entrée est juste en dessous, au milieu)
+  g.fillStyle = "#c9a96e";
+  g.beginPath();
+  g.roundRect(x + C + 8, y + w - 6, C - 16, 24, 8);
+  g.fill();
+  // terre-plein
+  g.fillStyle = "#c2a878";
+  g.beginPath();
+  g.roundRect(x + 3, y + 3, w - 6, w - 6, 20);
+  g.fill();
+  g.strokeStyle = "#9c8049";
+  g.lineWidth = 2;
+  g.stroke();
+  // quai : planches qui sortent du côté de l'eau, sur une case de plus
+  const px = x + C + 6;
+  const pw = C - 12;
+  const py = y - C * 0.95;
+  g.fillStyle = "rgba(20,40,60,0.28)";
+  g.fillRect(px + 5, py + 6, pw, C * 1.5);
+  g.fillStyle = "#a47c48";
+  g.fillRect(px, py, pw, C * 1.5);
+  g.strokeStyle = "#7a5a34";
+  g.lineWidth = 2;
+  for (let k = 0; k < 8; k++) {
+    g.beginPath();
+    g.moveTo(px, py + 8 + k * 11);
+    g.lineTo(px + pw, py + 8 + k * 11);
+    g.stroke();
+  }
+  g.strokeRect(px, py, pw, C * 1.5);
+  // pieux au bout du quai
+  g.fillStyle = "#5a3a1c";
+  for (const [qx, qy] of [[px, py], [px + pw, py], [px, py + 34], [px + pw, py + 34]]) {
+    g.beginPath();
+    g.arc(qx, qy, 5, 0, Math.PI * 2);
+    g.fill();
+  }
+  // entrepôt : toit à rangées bleues et ancre blanche
+  const rx = x + 12;
+  const ry = y + C * 0.9;
+  const rw = w - 24;
+  const rh = C * 1.55;
+  g.fillStyle = "rgba(40,30,10,0.28)";
+  g.fillRect(rx + 6, ry + 6, rw, rh);
+  g.fillStyle = "#4f78a8";
+  g.fillRect(rx, ry, rw, rh);
+  g.strokeStyle = "rgba(20,40,70,0.35)";
+  g.lineWidth = 2;
+  for (let k = 1; k < 7; k++) {
+    g.beginPath();
+    g.moveTo(rx + 3, ry + (k * rh) / 7);
+    g.lineTo(rx + rw - 3, ry + (k * rh) / 7);
+    g.stroke();
+  }
+  g.strokeStyle = "#2b4a72";
+  g.lineWidth = 3;
+  g.strokeRect(rx, ry, rw, rh);
+  g.strokeStyle = "#f1f5fb";
+  g.lineWidth = 4;
+  g.lineCap = "round";
+  const ax = rx + rw / 2;
+  const ay = ry + rh / 2;
+  g.beginPath();
+  g.arc(ax, ay - 10, 6, 0, Math.PI * 2);
+  g.moveTo(ax, ay - 4);
+  g.lineTo(ax, ay + 20);
+  g.moveTo(ax - 12, ay + 4);
+  g.lineTo(ax + 12, ay + 4);
+  g.moveTo(ax - 15, ay + 12);
+  g.quadraticCurveTo(ax, ay + 28, ax + 15, ay + 12);
+  g.stroke();
+  // caisses et tonneaux près du quai
+  g.fillStyle = "#b08a58";
+  g.fillRect(x + 12, y + 14, 34, 30);
+  g.strokeStyle = "#7a5a34";
+  g.lineWidth = 2;
+  g.strokeRect(x + 12, y + 14, 34, 30);
+  g.fillStyle = "#8a5a2e";
+  g.beginPath();
+  g.arc(x + w - 30, y + 30, 14, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = "#5a3a1c";
+  g.stroke();
+}
+
+// Le bateau qui passe : il arrive du large, s'amarre au bout du quai pendant qu'on charge, puis repart. Il suit le cycle de `port.t`.
+export function drawShip(g: CanvasRenderingContext2D, port: Port, time: number) {
+  const f = port.t / SHIP_CYCLE;
+  if (f < SHIP_ARRIVE - 0.02 || f > SHIP_GONE) return;
+  const rot = (port.rot ?? 0) % 4;
+  const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  const [dx, dy] = dirs[rot];
+  const dock = 3.45; // distance du centre du port au bateau à quai, en cases
+  const far = 11; // distance d'où il arrive
+  let dist = dock;
+  let heading = 1; // 1 : il vient vers le quai, -1 : il repart
+  if (f < SHIP_DOCKED) dist = dock + (far - dock) * (1 - (f - (SHIP_ARRIVE - 0.02)) / (SHIP_DOCKED - SHIP_ARRIVE + 0.02));
+  else if (f > SHIP_DEPART) {
+    dist = dock + (far - dock) * ((f - SHIP_DEPART) / (SHIP_GONE - SHIP_DEPART));
+    heading = -1;
+  }
+  const cx = (port.gx + 1.5) * C + dx * dist * C;
+  const cy = (port.gy + 1.5) * C + dy * dist * C;
+  g.save();
+  g.translate(cx, cy + Math.sin(time / 400) * 2);
+  // l'avant du bateau regarde vers le quai (centre du port) à l'arrivée, vers le large au départ
+  g.rotate(Math.atan2(dy, dx) + (heading > 0 ? Math.PI : 0));
+  const L = C * 1.1;
+  const W = C * 0.42;
+  g.fillStyle = "rgba(10,40,70,0.3)";
+  g.beginPath();
+  g.ellipse(5, 6, L, W, 0, 0, Math.PI * 2);
+  g.fill();
+  // sillage
+  g.strokeStyle = "rgba(255,255,255,0.55)";
+  g.lineWidth = 3;
+  g.beginPath();
+  g.ellipse(0, 0, L * 1.12, W * 1.25, 0, 0, Math.PI * 2);
+  g.stroke();
+  // coque
+  g.fillStyle = "#7a4e2a";
+  g.beginPath();
+  g.moveTo(L, 0);
+  g.quadraticCurveTo(L * 0.7, -W, 0, -W);
+  g.lineTo(-L * 0.9, -W * 0.85);
+  g.lineTo(-L * 0.9, W * 0.85);
+  g.lineTo(0, W);
+  g.quadraticCurveTo(L * 0.7, W, L, 0);
+  g.closePath();
+  g.fill();
+  g.strokeStyle = "#4e3320";
+  g.lineWidth = 3;
+  g.stroke();
+  // pont, caisses, mât et voile
+  g.fillStyle = "#b08a58";
+  g.beginPath();
+  g.roundRect(-L * 0.75, -W * 0.6, L * 1.3, W * 1.2, 6);
+  g.fill();
+  g.fillStyle = "#8a5a2e";
+  for (const k of [-0.5, 0.05]) g.fillRect(L * k - 8, -W * 0.35, 16, 16);
+  g.fillStyle = "#f4efe4";
+  g.beginPath();
+  g.roundRect(-L * 0.1, -W * 1.1, L * 0.5, W * 2.2, 8);
+  g.fill();
+  g.strokeStyle = "#c9bfa5";
+  g.lineWidth = 2;
+  g.stroke();
+  g.fillStyle = "#5a3a1c";
+  g.beginPath();
+  g.arc(L * 0.15, 0, 5, 0, Math.PI * 2);
+  g.fill();
+  g.restore();
+}
+
+// Boucherie (3 × 3 cases), vue de dessus : auvent rayé rouge et blanc, billot avec un couperet, caisses de viande.
+// working : le couperet s'abat.
+export function drawButcher(g: CanvasRenderingContext2D, gx: number, gy: number, working: boolean, t: number, rot = 0) {
+  rotated(g, gx, gy, 3, rot, () => butcherBody(g, gx, gy));
+  // le couperet, lui, s'anime à part (sa position suit la rotation du bâtiment)
+  const w = 3 * C;
+  let vx = w * 0.3 - w / 2;
+  let vy = w * 0.74 - w / 2;
+  for (let i = 0; i < rot % 4; i++) [vx, vy] = [-vy, vx];
+  const cx = gx * C + w / 2 + vx;
+  const cy = gy * C + w / 2 + vy;
+  const swing = working ? Math.max(0, Math.sin(t / 130)) : 0;
+  g.save();
+  g.translate(cx, cy);
+  g.rotate(((rot % 4) * Math.PI) / 2 - 0.9 + swing * 1.1);
+  g.strokeStyle = "#6b4a28";
+  g.lineWidth = 4;
+  g.lineCap = "round";
+  g.beginPath();
+  g.moveTo(0, 0);
+  g.lineTo(22, 0);
+  g.stroke();
+  g.fillStyle = "#cfd3d8";
+  g.beginPath();
+  g.roundRect(18, -9, 18, 18, 3);
+  g.fill();
+  g.strokeStyle = "#8b9099";
+  g.lineWidth = 2;
+  g.stroke();
+  g.restore();
+}
+
+function butcherBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  const x = gx * C;
+  const y = gy * C;
+  const w = 3 * C;
+  // seuil de l'entrée : tapis de terre sous la porte (la case d'entrée est juste en dessous, au milieu)
+  g.fillStyle = "#c9a96e";
+  g.beginPath();
+  g.roundRect(x + C + 8, y + w - 6, C - 16, 24, 8);
+  g.fill();
+  // cour piétinée
+  g.fillStyle = "#b79a63";
+  g.beginPath();
+  g.roundRect(x + 3, y + 3, w - 6, w - 6, 24);
+  g.fill();
+  g.strokeStyle = "#9c8049";
+  g.lineWidth = 2;
+  g.stroke();
+  // boutique : toit à bandes rouges et blanches
+  const rx = x + 14;
+  const ry = y + 14;
+  const rw = w * 0.66;
+  const rh = w * 0.44;
+  g.fillStyle = "rgba(40,30,10,0.28)";
+  g.fillRect(rx + 6, ry + 6, rw, rh);
+  const stripes = 8;
+  for (let k = 0; k < stripes; k++) {
+    g.fillStyle = k % 2 ? "#f1ebe0" : "#c0453a";
+    g.fillRect(rx + (k * rw) / stripes, ry, rw / stripes + 0.5, rh);
+  }
+  g.strokeStyle = "#7d3624";
+  g.lineWidth = 3;
+  g.strokeRect(rx, ry, rw, rh);
+  g.strokeStyle = "rgba(90,30,20,0.5)";
+  g.lineWidth = 4;
+  g.beginPath();
+  g.moveTo(rx, ry + rh / 2);
+  g.lineTo(rx + rw, ry + rh / 2);
+  g.stroke();
+  // crochets de boucher sous l'auvent (en haut à droite) : deux quartiers de viande suspendus
+  for (let k = 0; k < 2; k++) {
+    const hx = x + w - 52 + k * 26;
+    g.strokeStyle = "#7c7b77";
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(hx, y + 20);
+    g.lineTo(hx, y + 36);
+    g.stroke();
+    g.fillStyle = k % 2 ? "#a63a30" : "#b5443a";
+    g.beginPath();
+    g.ellipse(hx, y + 56, 10, 20, 0, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#f2e8d8";
+    g.beginPath();
+    g.ellipse(hx, y + 40, 4, 5, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+  // billot en bois (en bas à gauche) : le couperet est dessiné par drawButcher
+  const bx = x + w * 0.3;
+  const by = y + w * 0.74;
+  g.fillStyle = "rgba(40,30,10,0.3)";
+  g.beginPath();
+  g.arc(bx + 4, by + 5, 28, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#9a6a3a";
+  g.beginPath();
+  g.arc(bx, by, 28, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = "#6b4a28";
+  g.lineWidth = 3;
+  g.stroke();
+  g.strokeStyle = "rgba(90,60,30,0.5)";
+  g.lineWidth = 1.5;
+  for (const rr of [8, 16, 23]) {
+    g.beginPath();
+    g.arc(bx, by, rr, 0, Math.PI * 2);
+    g.stroke();
+  }
+  // caisses de viande (en bas à droite)
+  for (let k = 0; k < 2; k++) {
+    const cx2 = x + w - 100 + k * 46;
+    const cy2 = y + w * 0.64 + (k ? 20 : 0);
+    g.fillStyle = "rgba(40,30,10,0.3)";
+    g.fillRect(cx2 + 4, cy2 + 4, 40, 34);
+    g.fillStyle = "#b08a58";
+    g.fillRect(cx2, cy2, 40, 34);
+    g.strokeStyle = "#7a5a34";
+    g.lineWidth = 2;
+    g.strokeRect(cx2, cy2, 40, 34);
+    g.fillStyle = "#c0453a";
+    g.beginPath();
+    g.ellipse(cx2 + 14, cy2 + 15, 8, 6, 0.3, 0, Math.PI * 2);
+    g.ellipse(cx2 + 28, cy2 + 20, 7, 5, -0.3, 0, Math.PI * 2);
+    g.fill();
+  }
+}
+
+// Camp de chasseur (2 × 2 cases) : tente de peau, étendoir où sèche la viande, peau tendue au sol.
+export function drawLodge(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0) {
+  rotated(g, gx, gy, 2, rot, () => lodgeBody(g, gx, gy));
+}
+
+function lodgeBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  const x = gx * C;
+  const y = gy * C;
+  const w = 2 * C;
+  // seuil de l'entrée (la case d'entrée est juste en dessous, côté gauche)
+  g.fillStyle = "#c9a96e";
+  g.beginPath();
+  g.roundRect(x + 10, y + w - 6, 44, 24, 8);
+  g.fill();
+  // sol piétiné
+  g.fillStyle = "#b79a63";
+  g.beginPath();
+  g.roundRect(x + 3, y + 3, w - 6, w - 6, 24);
+  g.fill();
+  g.strokeStyle = "#9c8049";
+  g.lineWidth = 2;
+  g.stroke();
+  // tente ronde en peau : huit pans qui montent vers le mât
+  const cx = x + 44;
+  const cy = y + 46;
+  g.fillStyle = "rgba(40,30,10,0.3)";
+  g.beginPath();
+  g.arc(cx + 5, cy + 6, 32, 0, Math.PI * 2);
+  g.fill();
+  for (let k = 0; k < 8; k++) {
+    g.fillStyle = k % 2 ? "#c79a62" : "#b8854e";
+    g.beginPath();
+    g.moveTo(cx, cy);
+    g.arc(cx, cy, 32, (k / 8) * Math.PI * 2, ((k + 1) / 8) * Math.PI * 2);
+    g.closePath();
+    g.fill();
+  }
+  g.strokeStyle = "#7a5430";
+  g.lineWidth = 2.5;
+  g.beginPath();
+  g.arc(cx, cy, 32, 0, Math.PI * 2);
+  g.stroke();
+  g.fillStyle = "#4e3320";
+  g.beginPath();
+  g.arc(cx, cy, 5, 0, Math.PI * 2);
+  g.fill();
+  // porte de la tente (un pan plus sombre)
+  g.fillStyle = "#4e3320";
+  g.beginPath();
+  g.moveTo(cx - 8, cy + 31);
+  g.lineTo(cx + 8, cy + 31);
+  g.lineTo(cx, cy + 14);
+  g.closePath();
+  g.fill();
+  // étendoir à viande (à droite) : deux piquets, une barre et des lanières
+  g.strokeStyle = "#6b4a28";
+  g.lineWidth = 4;
+  g.lineCap = "round";
+  g.beginPath();
+  g.moveTo(x + w - 44, y + 22);
+  g.lineTo(x + w - 44, y + 86);
+  g.moveTo(x + w - 14, y + 22);
+  g.lineTo(x + w - 14, y + 86);
+  g.moveTo(x + w - 46, y + 28);
+  g.lineTo(x + w - 12, y + 28);
+  g.stroke();
+  for (let k = 0; k < 3; k++) {
+    g.fillStyle = k % 2 ? "#a63a30" : "#b5443a";
+    g.beginPath();
+    g.roundRect(x + w - 40 + k * 10, y + 30, 7, 24 + k * 4, 3);
+    g.fill();
+  }
+  // peau tendue au sol (en bas à droite)
+  g.fillStyle = "#a9733f";
+  g.beginPath();
+  g.ellipse(x + w - 36, y + w - 36, 24, 15, -0.3, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = "#7a5430";
+  g.lineWidth = 2;
+  g.stroke();
+}
+
+// Puits (2 × 2 cases) : margelle de pierre, eau, deux montants et un seau sur sa corde.
+export function drawWell(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0) {
+  rotated(g, gx, gy, 2, rot, () => wellBody(g, gx, gy));
+}
+
+function wellBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  const x = gx * C;
+  const y = gy * C;
+  const w = 2 * C;
+  // seuil de l'entrée (la case d'entrée est juste en dessous, côté gauche)
+  g.fillStyle = "#c9a96e";
+  g.beginPath();
+  g.roundRect(x + 10, y + w - 6, 44, 24, 8);
+  g.fill();
+  // sol piétiné
+  g.fillStyle = "#b79a63";
+  g.beginPath();
+  g.roundRect(x + 3, y + 3, w - 6, w - 6, 24);
+  g.fill();
+  g.strokeStyle = "#9c8049";
+  g.lineWidth = 2;
+  g.stroke();
+  const cx = x + w / 2;
+  const cy = y + w / 2;
+  // margelle
+  g.fillStyle = "rgba(40,30,10,0.3)";
+  g.beginPath();
+  g.arc(cx + 5, cy + 6, 40, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#a8a6a0";
+  g.beginPath();
+  g.arc(cx, cy, 40, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = "#7c7b77";
+  g.lineWidth = 3;
+  g.stroke();
+  // pierres de la margelle
+  g.strokeStyle = "rgba(90,88,84,0.6)";
+  g.lineWidth = 2;
+  for (let k = 0; k < 10; k++) {
+    const a = (k / 10) * Math.PI * 2;
+    g.beginPath();
+    g.moveTo(cx + Math.cos(a) * 30, cy + Math.sin(a) * 30);
+    g.lineTo(cx + Math.cos(a) * 40, cy + Math.sin(a) * 40);
+    g.stroke();
+  }
+  // eau
+  g.fillStyle = "#2b6fae";
+  g.beginPath();
+  g.arc(cx, cy, 29, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#5aa9e6";
+  g.beginPath();
+  g.arc(cx - 7, cy - 7, 14, 0, Math.PI * 2);
+  g.fill();
+  // poutre au-dessus et seau
+  g.strokeStyle = "#7a4e2a";
+  g.lineWidth = 6;
+  g.lineCap = "round";
+  g.beginPath();
+  g.moveTo(cx - 46, cy - 2);
+  g.lineTo(cx + 46, cy - 2);
+  g.stroke();
+  g.fillStyle = "#5a3a1c";
+  for (const px of [cx - 46, cx + 46]) {
+    g.beginPath();
+    g.arc(px, cy - 2, 6, 0, Math.PI * 2);
+    g.fill();
+  }
+  g.fillStyle = "#8a5a2e";
+  g.beginPath();
+  g.arc(cx + 14, cy - 2, 9, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#5aa9e6";
+  g.beginPath();
+  g.arc(cx + 14, cy - 2, 5.5, 0, Math.PI * 2);
+  g.fill();
+}
+
+// Maison (2 × 2 cases), vue de dessus : toit de tuiles à deux pans, cheminée et porte en bas à gauche.
+// smoke : quelqu'un est à l'intérieur, une fumée sort de la cheminée.
+function houseBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  const x = gx * C;
+  const y = gy * C;
+  const w = 2 * C;
+  // seuil : tapis devant la porte (la case d'entrée est juste en dessous)
+  g.fillStyle = "#c9a96e";
+  g.beginPath();
+  g.roundRect(x + 10, y + w - 6, 44, 24, 8);
+  g.fill();
+  // ombre et murs
+  g.fillStyle = "rgba(40,30,10,0.28)";
+  g.fillRect(x + 8, y + 10, w - 8, w - 8);
+  g.fillStyle = "#efe2c0";
+  g.beginPath();
+  g.roundRect(x + 3, y + 3, w - 6, w - 6, 6);
+  g.fill();
+  // porte sur le mur du bas
+  g.fillStyle = "#7a4e2a";
+  g.fillRect(x + 20, y + w - 12, 24, 10);
+  g.fillStyle = "#e6c264";
+  g.fillRect(x + 38, y + w - 8, 3, 3);
+  // toit : deux pans, le haut plus sombre, le bas plus clair
+  const rx = x + 2;
+  const rw = w - 4;
+  g.fillStyle = "#b5523a";
+  g.beginPath();
+  g.roundRect(rx, y + 2, rw, (w - 14) / 2, [8, 8, 0, 0]);
+  g.fill();
+  g.fillStyle = "#cf6a4c";
+  g.beginPath();
+  g.roundRect(rx, y + 2 + (w - 14) / 2, rw, (w - 14) / 2, [0, 0, 8, 8]);
+  g.fill();
+  // rangées de tuiles
+  g.strokeStyle = "rgba(90,30,20,0.35)";
+  g.lineWidth = 1.5;
+  g.beginPath();
+  for (let k = 1; k < 8; k++) {
+    const ty = y + 2 + (k * (w - 14)) / 8;
+    g.moveTo(rx + 3, ty);
+    g.lineTo(rx + rw - 3, ty);
+  }
+  g.stroke();
+  // faîtage
+  g.strokeStyle = "#7d3624";
+  g.lineWidth = 4;
+  g.lineCap = "round";
+  g.beginPath();
+  g.moveTo(rx + 6, y + 2 + (w - 14) / 2);
+  g.lineTo(rx + rw - 6, y + 2 + (w - 14) / 2);
+  g.stroke();
+  // cheminée en pierre
+  const cx = x + w * 0.7;
+  const cy = y + w * 0.18;
+  g.fillStyle = "rgba(40,30,10,0.3)";
+  g.fillRect(cx - 9, cy - 7, 24, 24);
+  g.fillStyle = "#9b9a96";
+  g.fillRect(cx - 12, cy - 12, 24, 24);
+  g.fillStyle = "#4a4743";
+  g.fillRect(cx - 7, cy - 7, 14, 14);
+  g.strokeStyle = "#7c7b77";
+  g.lineWidth = 2;
+  g.strokeRect(cx - 12, cy - 12, 24, 24);
+}
+
+// Camp de bûcheron (2 × 2 cases) : sol piétiné, tente, tas de bûches, foyer et souche avec une hache.
+function campBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  const x = gx * C;
+  const y = gy * C;
+  const w = 2 * C;
+  // seuil de l'entrée : un tapis de terre et deux piquets sur le bord bas, côté gauche (la case d'entrée est juste en dessous)
+  g.fillStyle = "#c9a96e";
+  g.beginPath();
+  g.roundRect(x + 10, y + w - 8, 44, 26, 8);
+  g.fill();
+  g.fillStyle = "#6d4527";
+  for (const px of [12, 52]) {
+    g.beginPath();
+    g.arc(x + px, y + w - 4, 3.4, 0, Math.PI * 2);
+    g.fill();
+  }
+  // sol piétiné
+  g.fillStyle = "#b79a63";
+  g.beginPath();
+  g.roundRect(x + 3, y + 3, w - 6, w - 6, 24);
+  g.fill();
+  g.strokeStyle = "#9c8049";
+  g.lineWidth = 2;
+  g.stroke();
+  g.fillStyle = "rgba(120,90,45,0.35)";
+  for (const [px, py] of [[22, 100], [58, 70], [100, 62], [14, 52], [88, 112], [66, 22]]) {
+    g.beginPath();
+    g.arc(x + px, y + py, 2.4, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  // tente (en haut à gauche) : deux pans, faîtage, entrée sur le côté
+  g.fillStyle = "rgba(40,30,10,0.25)";
+  g.fillRect(x + 20, y + 20, 66, 52);
+  g.fillStyle = "#e6d29c";
+  g.fillRect(x + 14, y + 14, 66, 26);
+  g.fillStyle = "#cdb67c";
+  g.fillRect(x + 14, y + 40, 66, 26);
+  g.strokeStyle = "#8a7440";
+  g.lineWidth = 3;
+  g.beginPath();
+  g.moveTo(x + 14, y + 40);
+  g.lineTo(x + 80, y + 40);
+  g.stroke();
+  g.fillStyle = "#5a4a2a";
+  g.fillRect(x + 74, y + 31, 6, 18);
+  g.fillStyle = "#6b4a2b";
+  for (const [px, py] of [[12, 12], [82, 12], [12, 68], [82, 68]]) {
+    g.beginPath();
+    g.arc(x + px, y + py, 2.6, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  // souche et hache (en haut à droite)
+  g.fillStyle = "rgba(40,30,10,0.25)";
+  g.beginPath();
+  g.ellipse(x + 104, y + 34, 13, 11, 0, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#6b4a2b";
+  g.beginPath();
+  g.arc(x + 100, y + 30, 12, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#c79a64";
+  g.beginPath();
+  g.arc(x + 100, y + 30, 8.6, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = "#a8794a";
+  g.lineWidth = 1;
+  g.beginPath();
+  g.arc(x + 100, y + 30, 4.4, 0, Math.PI * 2);
+  g.stroke();
+  g.strokeStyle = "#7a4e2a";
+  g.lineWidth = 3;
+  g.lineCap = "round";
+  g.beginPath();
+  g.moveTo(x + 98, y + 28);
+  g.lineTo(x + 118, y + 14);
+  g.stroke();
+  g.fillStyle = "#b9bdc4";
+  g.beginPath();
+  g.moveTo(x + 94, y + 20);
+  g.lineTo(x + 104, y + 26);
+  g.lineTo(x + 101, y + 34);
+  g.lineTo(x + 92, y + 28);
+  g.closePath();
+  g.fill();
+
+  // foyer (en bas à gauche) : cercle de pierres et braises
+  const fx = x + 34;
+  const fy = y + 96;
+  g.fillStyle = "#3a2a22";
+  g.beginPath();
+  g.arc(fx, fy, 13, 0, Math.PI * 2);
+  g.fill();
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * Math.PI * 2;
+    g.fillStyle = i % 2 ? "#8d8f94" : "#a7aab2";
+    g.beginPath();
+    g.arc(fx + Math.cos(a) * 15, fy + Math.sin(a) * 15, 5.2, 0, Math.PI * 2);
+    g.fill();
+  }
+  g.fillStyle = "#f08a24";
+  g.beginPath();
+  g.ellipse(fx, fy, 8, 6, 0.4, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#ffd34d";
+  g.beginPath();
+  g.ellipse(fx - 1, fy - 1, 4, 3, 0.4, 0, Math.PI * 2);
+  g.fill();
+
+  // tas de bûches (en bas à droite) : trois rangées, bouts clairs à gauche
+  g.fillStyle = "rgba(40,30,10,0.25)";
+  g.fillRect(x + 74, y + 90, 48, 36);
+  const woods = ["#8a5a2e", "#9a6a3a", "#7c4f27"];
+  for (let r = 0; r < 3; r++) {
+    const ly = y + 86 + r * 12;
+    g.fillStyle = woods[r];
+    g.beginPath();
+    g.roundRect(x + 70 + (r % 2) * 4, ly, 46, 11, 5);
+    g.fill();
+    g.fillStyle = "#d9b27a";
+    g.beginPath();
+    g.arc(x + 71 + (r % 2) * 4, ly + 5.5, 5.5, 0, Math.PI * 2);
+    g.fill();
+    g.strokeStyle = "#a8794a";
+    g.lineWidth = 1;
+    g.beginPath();
+    g.arc(x + 71 + (r % 2) * 4, ly + 5.5, 2.6, 0, Math.PI * 2);
+    g.stroke();
+  }
+}
+
+// Dépôt (3 × 3 cases) : grand entrepôt au toit de planches, porte ouverte devant, caisses et tonneau dehors.
+function depotBody(g: CanvasRenderingContext2D, gx: number, gy: number, level = 1) {
+  const x = gx * C;
+  const y = gy * C;
+  const w = 3 * C;
+  // seuil de l'entrée : un tapis de terre et deux piquets sous la porte, dans la colonne du milieu
+  g.fillStyle = "#c9a96e";
+  g.beginPath();
+  g.roundRect(x + C + 8, y + w - 8, C - 16, 26, 8);
+  g.fill();
+  g.fillStyle = "#6d4527";
+  for (const px of [C + 10, 2 * C - 10]) {
+    g.beginPath();
+    g.arc(x + px, y + w - 4, 3.4, 0, Math.PI * 2);
+    g.fill();
+  }
+  // cour de terre devant l'entrepôt
+  g.fillStyle = "#b79a63";
+  g.beginPath();
+  g.roundRect(x + 3, y + 3, w - 6, w - 6, 22);
+  g.fill();
+  g.strokeStyle = "#9c8049";
+  g.lineWidth = 2;
+  g.stroke();
+
+  // entrepôt : ombre, deux pans de toit, faîtage, lignes de planches
+  const bx = x + 14;
+  const by = y + 12;
+  const bw = w - 28;
+  const bh = 128;
+  g.fillStyle = "rgba(40,30,10,0.28)";
+  g.fillRect(bx + 8, by + 9, bw, bh);
+  // le toit change avec le niveau : bois brun, tuiles rouges, ardoise bleutée
+  g.fillStyle = level >= 3 ? "#6f7f93" : level === 2 ? "#b4603f" : "#9a6b42";
+  g.fillRect(bx, by, bw / 2, bh);
+  g.fillStyle = level >= 3 ? "#56657a" : level === 2 ? "#94492d" : "#7f5632";
+  g.fillRect(bx + bw / 2, by, bw / 2, bh);
+  g.strokeStyle = "rgba(40,25,10,0.28)";
+  g.lineWidth = 1;
+  for (let i = 1; i < 12; i++) {
+    g.beginPath();
+    g.moveTo(bx, by + (i * bh) / 12);
+    g.lineTo(bx + bw, by + (i * bh) / 12);
+    g.stroke();
+  }
+  g.strokeStyle = "#4e3320";
+  g.lineWidth = 4;
+  g.beginPath();
+  g.moveTo(bx + bw / 2, by);
+  g.lineTo(bx + bw / 2, by + bh);
+  g.stroke();
+  g.strokeStyle = level >= 3 ? "#d9b24a" : "#5a3d24";
+  g.lineWidth = 3;
+  g.strokeRect(bx, by, bw, bh);
+  if (level >= 2) {
+    // soubassement de pierre et pierres d'angle
+    g.fillStyle = "#a9a49a";
+    g.fillRect(bx - 2, by + bh - 12, bw + 4, 12);
+    g.strokeStyle = "#6f6a60";
+    g.lineWidth = 1.5;
+    for (let k = 0; k <= 6; k++) {
+      g.beginPath();
+      g.moveTo(bx + (k * bw) / 6, by + bh - 12);
+      g.lineTo(bx + (k * bw) / 6, by + bh);
+      g.stroke();
+    }
+    g.strokeRect(bx - 2, by + bh - 12, bw + 4, 12);
+  }
+  if (level >= 3) {
+    // fanion doré au sommet du toit
+    g.strokeStyle = "#5a3d24";
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(bx + bw / 2, by + 4);
+    g.lineTo(bx + bw / 2, by - 26);
+    g.stroke();
+    g.fillStyle = "#d9b24a";
+    g.beginPath();
+    g.moveTo(bx + bw / 2, by - 26);
+    g.lineTo(bx + bw / 2 + 24, by - 19);
+    g.lineTo(bx + bw / 2, by - 12);
+    g.closePath();
+    g.fill();
+  }
+
+  // grande porte ouverte, au milieu du bord bas
+  const dx = bx + bw / 2 - 26;
+  g.fillStyle = "#2d2118";
+  g.fillRect(dx, by + bh - 4, 52, 14);
+  g.fillStyle = "#b98a52";
+  g.fillRect(dx - 14, by + bh + 2, 16, 8);
+  g.fillRect(dx + 50, by + bh + 2, 16, 8);
+  g.strokeStyle = "#6d4527";
+  g.lineWidth = 1.5;
+  g.strokeRect(dx - 14, by + bh + 2, 16, 8);
+  g.strokeRect(dx + 50, by + bh + 2, 16, 8);
+
+  // caisses et tonneau dans la cour
+  const crate = (cx: number, cy: number) => {
+    g.fillStyle = "rgba(40,30,10,0.25)";
+    g.fillRect(cx + 3, cy + 4, 24, 24);
+    g.fillStyle = "#b98a52";
+    g.fillRect(cx, cy, 24, 24);
+    g.strokeStyle = "#7a5530";
+    g.lineWidth = 2;
+    g.strokeRect(cx, cy, 24, 24);
+    g.beginPath();
+    g.moveTo(cx, cy);
+    g.lineTo(cx + 24, cy + 24);
+    g.moveTo(cx + 24, cy);
+    g.lineTo(cx, cy + 24);
+    g.stroke();
+  };
+  crate(x + 20, by + bh + 20);
+  crate(x + 48, by + bh + 26);
+  g.fillStyle = "rgba(40,30,10,0.25)";
+  g.beginPath();
+  g.ellipse(x + w - 36, by + bh + 38, 14, 12, 0, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#7a4e2a";
+  g.beginPath();
+  g.arc(x + w - 40, by + bh + 34, 13, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = "#4a2f18";
+  g.lineWidth = 2;
+  g.beginPath();
+  g.arc(x + w - 40, by + bh + 34, 9, 0, Math.PI * 2);
+  g.stroke();
+  g.fillStyle = "#a8794a";
+  g.beginPath();
+  g.arc(x + w - 40, by + bh + 34, 5, 0, Math.PI * 2);
+  g.fill();
+}
+
+// ---------- chemins ----------
+
+// Les chemins sont tracés d'un seul trait : chaque case est un disque relié à ses voisines, en trois passes
+// (ombre, bord foncé, terre claire) pour que les virages et les carrefours soient continus.
+export function drawRoads(g: CanvasRenderingContext2D, roads: Record<number, 1>, grid: number, view: { x0: number; y0: number; x1: number; y1: number }) {
+  const gx0 = Math.max(0, Math.floor(view.x0 / C) - 1);
+  const gx1 = Math.min(grid - 1, Math.floor(view.x1 / C) + 1);
+  const gy0 = Math.max(0, Math.floor(view.y0 / C) - 1);
+  const gy1 = Math.min(grid - 1, Math.floor(view.y1 / C) + 1);
+  const cells: [number, number][] = [];
+  for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) if (roads[gy * grid + gx]) cells.push([gx, gy]);
+  if (!cells.length) return;
+  g.lineCap = "round";
+  g.lineJoin = "round";
+  const passes: [string, number, number][] = [
+    ["rgba(110,140,50,0.28)", 1.04, 0], // lisière : l'herbe piétinée autour du chemin
+    ["rgba(60,40,10,0.22)", 0.86, 1],
+    ["#a98650", 0.86, 0],
+    ["#d6b983", 0.7, 0],
+    ["#e2c995", 0.46, 0],
+  ];
+  for (const [color, width, shadow] of passes) {
+    g.save();
+    if (shadow) g.translate(3, 4);
+    g.strokeStyle = color;
+    g.lineWidth = width * C;
+    g.beginPath();
+    for (const [gx, gy] of cells) {
+      const x = (gx + 0.5) * C;
+      const y = (gy + 0.5) * C;
+      g.moveTo(x, y);
+      g.lineTo(x + 0.01, y); // un point : avec le bout arrondi, c'est un disque
+      if (roads[gy * grid + gx + 1] && gx + 1 < grid) {
+        g.moveTo(x, y);
+        g.lineTo(x + C, y);
+      }
+      if (roads[(gy + 1) * grid + gx]) {
+        g.moveTo(x, y);
+        g.lineTo(x, y + C);
+      }
+    }
+    g.stroke();
+    g.restore();
+  }
+  // cailloux et brins d'herbe, toujours aux mêmes endroits (tirés du numéro de la case)
+  for (const [gx, gy] of cells) {
+    let h = (gx * 73856093) ^ (gy * 19349663);
+    const rnd = () => {
+      h = Math.imul(h ^ (h >>> 15), 2246822507) ^ Math.imul(h ^ (h >>> 13), 3266489909);
+      return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+    };
+    for (let i = 0; i < 3; i++) {
+      const x = (gx + 0.22 + rnd() * 0.56) * C;
+      const y = (gy + 0.22 + rnd() * 0.56) * C;
+      const r = (0.035 + rnd() * 0.04) * C;
+      g.fillStyle = rnd() < 0.5 ? "#9a7a4a" : "#f0dfb4";
+      g.beginPath();
+      g.ellipse(x, y, r * 1.3, r, rnd() * 3, 0, Math.PI * 2);
+      g.fill();
+    }
+    if (rnd() < 0.35) {
+      g.strokeStyle = "#7fae4c";
+      g.lineWidth = 2;
+      const x = (gx + 0.5 + (rnd() - 0.5) * 0.9) * C;
+      const y = (gy + 0.5 + (rnd() - 0.5) * 0.9) * C;
+      g.beginPath();
+      g.moveTo(x - 3, y + 3);
+      g.lineTo(x, y - 3);
+      g.lineTo(x + 3, y + 3);
+      g.stroke();
+    }
+  }
+}
+
+// Une case de chemin isolée (aperçu de pose).
+export function drawRoadCell(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  const x = (gx + 0.5) * C;
+  const y = (gy + 0.5) * C;
+  for (const [color, width] of [["#9c7a46", 0.86], ["#cfae74", 0.68]] as [string, number][]) {
+    g.fillStyle = color;
+    g.beginPath();
+    g.arc(x, y, (width * C) / 2, 0, Math.PI * 2);
+    g.fill();
+  }
+}
+
+// Vignette d'une structure dans la barre de construction.
+export function drawStructureThumb(canvas: HTMLCanvasElement, id: string) {
+  const g = canvas.getContext("2d")!;
+  g.clearRect(0, 0, canvas.width, canvas.height);
+  const def = STRUCTURES[id];
+  const size = def.kind === "road" ? 2.2 : def.size + 0.3;
+  const k = canvas.width / (C * size);
+  g.save();
+  g.scale(k, k);
+  g.fillStyle = "#a3ca63";
+  g.fillRect(0, 0, C * size, C * size);
+  if (def.kind === "road") {
+    // deux cases de chemin en ligne, au centre
+    g.translate(0.1 * C, 0.6 * C);
+    drawRoads(g, { 0: 1, 1: 1 }, 64, { x0: 0, y0: 0, x1: 2 * C, y1: C });
+  } else {
+    g.translate(0.15 * C, 0.15 * C);
+    if (def.kind === "camp") drawCamp(g, 0, 0);
+    else if (def.kind === "house") drawHouse(g, 0, 0, false, 0);
+    else if (def.kind === "sawmill") drawSawmill(g, 0, 0, false, 0);
+    else if (def.kind === "well") drawWell(g, 0, 0);
+    else if (def.kind === "lodge") drawLodge(g, 0, 0);
+    else if (def.kind === "butcher") drawButcher(g, 0, 0, false, 0);
+    else if (def.kind === "port") drawPort(g, 0, 0);
+    else if (def.kind === "apiary") drawApiary(g, 0, 0, false, 0);
+    else if (def.kind === "clinic") drawClinic(g, 0, 0);
+    else if (def.kind === "church") drawChurch(g, 0, 0);
+    else drawDepot(g, 0, 0);
+  }
+  g.restore();
+}
+
+// Repère d'entrée : une flèche pulsante vers le bâtiment, jaune tant qu'aucun chemin n'y arrive, verte une fois reliée.
+export function drawEntrance(g: CanvasRenderingContext2D, gx: number, gy: number, linked: boolean, t: number, rot = 0) {
+  const cx = (gx + 0.5) * C;
+  const cy = (gy + 0.5) * C;
+  const pulse = 0.5 + 0.5 * Math.sin(t / 220);
+  const r = C * (0.26 + 0.04 * pulse);
+  g.save();
+  g.translate(cx, cy);
+  g.rotate((rot * Math.PI) / 2);
+  g.fillStyle = linked ? "rgba(107,207,99,0.9)" : "rgba(255,211,77,0.95)";
+  g.strokeStyle = "#4a3b2a";
+  g.lineWidth = 3;
+  g.lineJoin = "round";
+  g.beginPath();
+  g.moveTo(0, -r); // la pointe regarde vers le bâtiment (en haut)
+  g.lineTo(r, r * 0.7);
+  g.lineTo(0, r * 0.25);
+  g.lineTo(-r, r * 0.7);
+  g.closePath();
+  g.fill();
+  g.stroke();
+  g.restore();
+}
+
+// Chantier : fondations posées, puis le bâtiment qui monte à mesure que la construction avance.
+// have/need : bois livré ; progress : de 0 à 1 une fois les matériaux réunis.
+export function drawSite(g: CanvasRenderingContext2D, kind: "camp" | "depot" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church", gx: number, gy: number, have: number, need: number, progress: number, t: number, rot = 0, undo = false, plank = false) {
+  const size = kind === "depot" || kind === "sawmill" || kind === "butcher" || kind === "port" || kind === "church" ? 3 : 2;
+  const x = gx * C;
+  const y = gy * C;
+  const w = size * C;
+  // fondations : dalle de terre battue bordée de planches
+  g.fillStyle = "rgba(60,40,20,0.28)";
+  g.fillRect(x + 4, y + 6, w, w);
+  g.fillStyle = "#b9a27a";
+  g.fillRect(x, y, w, w);
+  g.fillStyle = "#a58d65";
+  for (let i = 1; i < size * 2; i++) {
+    g.fillRect(x + (i * C) / 2 - 1, y, 2, w);
+    g.fillRect(x, y + (i * C) / 2 - 1, w, 2);
+  }
+  g.strokeStyle = "#7a5a34";
+  g.lineWidth = 5;
+  g.strokeRect(x + 2.5, y + 2.5, w - 5, w - 5);
+  g.fillStyle = "#7a5a34";
+  for (const [cx, cy] of [[0, 0], [w, 0], [0, w], [w, w]]) g.fillRect(x + cx - 5, y + cy - 5, 10, 10);
+
+  // le bâtiment monte par le bas, en transparence
+  if (progress > 0) {
+    g.save();
+    g.beginPath();
+    g.rect(x - 8, y + w * (1 - progress), w + 16, w * progress + 8);
+    g.clip();
+    g.globalAlpha = 0.85;
+    if (kind === "camp") drawCamp(g, gx, gy, rot);
+    else if (kind === "house") drawHouse(g, gx, gy, false, 0, rot);
+    else if (kind === "sawmill") drawSawmill(g, gx, gy, false, 0, rot);
+    else if (kind === "well") drawWell(g, gx, gy, rot);
+    else if (kind === "lodge") drawLodge(g, gx, gy, rot);
+    else if (kind === "butcher") drawButcher(g, gx, gy, false, 0, rot);
+    else if (kind === "port") drawPort(g, gx, gy, rot);
+    else if (kind === "apiary") drawApiary(g, gx, gy, false, 0, rot);
+    else if (kind === "clinic") drawClinic(g, gx, gy, rot);
+    else if (kind === "church") drawChurch(g, gx, gy, rot);
+    else drawDepot(g, gx, gy, rot);
+    g.restore();
+    g.globalAlpha = 1;
+    // échafaudage : ligne de coupe
+    g.strokeStyle = "#7a5a34";
+    g.lineWidth = 3;
+    const ly = y + w * (1 - progress);
+    g.beginPath();
+    g.moveTo(x - 6, ly);
+    g.lineTo(x + w + 6, ly);
+    g.stroke();
+  } else if (need > 0) {
+    // tas de bûches : une bûche par bois livré
+    for (let i = 0; i < Math.min(have, 12); i++) {
+      const lx = x + w * 0.18 + (i % 4) * C * 0.28;
+      const ly = y + w * 0.2 + Math.floor(i / 4) * C * 0.22;
+      g.fillStyle = i % 2 ? "#8a5a2e" : "#9a6a3a";
+      g.beginPath();
+      g.roundRect(lx, ly, C * 0.3, C * 0.15, 5);
+      g.fill();
+      g.fillStyle = "#d9b27a";
+      g.beginPath();
+      g.arc(lx + C * 0.3 - 3, ly + C * 0.075, 3.5, 0, Math.PI * 2);
+      g.fill();
+    }
+  }
+
+  // jauge : matériaux (bois) puis construction
+  const bw = w * 0.8;
+  const bx = x + (w - bw) / 2;
+  const by = y - 16;
+  g.fillStyle = "rgba(40,28,14,0.8)";
+  g.beginPath();
+  g.roundRect(bx - 3, by - 3, bw + 6, 20, 6);
+  g.fill();
+  const frac = need > 0 && have < need ? have / need : progress;
+  g.fillStyle = have < need ? "#d9a441" : "#7bc25a";
+  g.fillRect(bx, by + 8, bw * frac, 6);
+  g.fillStyle = "rgba(255,255,255,0.18)";
+  g.fillRect(bx + bw * frac, by + 8, bw * (1 - frac), 6);
+  g.font = "bold 11px 'Trebuchet MS', sans-serif";
+  g.textAlign = "center";
+  g.fillStyle = "#fff6e0";
+  const label = undo ? `🧰 Démontage ${Math.floor(progress * 100)}%` : need > 0 && have < need ? `${plank ? "🪚" : "🪵"} ${have}/${need}` : progress > 0 ? `🔨 ${Math.floor(progress * 100)}%` : "à construire";
+  g.fillText(label, bx + bw / 2, by + 6 + (Math.sin(t / 400) > 2 ? 1 : 0));
+}

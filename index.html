@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <title>Ferme vue de dessus</title>
+  <style>
+    :root { --ink:#4a3b2a; --paper:#fff6e0; --accent:#f2b134; }
+    html, body { margin:0; height:100%; background:#0e5087; overflow:hidden; font-family: "Trebuchet MS", system-ui, sans-serif; color:var(--ink); }
+    #game { position:fixed; inset:0; width:100%; height:100%; display:block; touch-action:none; cursor:pointer; }
+    .hud { position:fixed; top:12px; left:12px; display:flex; gap:8px; pointer-events:none; }
+    .pill { background:var(--paper); border:3px solid var(--ink); border-radius:999px; padding:6px 14px; font-weight:700; box-shadow:0 3px 0 rgba(0,0,0,.2); }
+    #goods { display:flex; gap:8px; }
+    [hidden] { display:none !important; }
+    button { font:inherit; color:var(--ink); }
+    .round { transition:transform .12s ease, background .15s ease, box-shadow .12s ease, opacity .15s; background:var(--paper); border:3px solid var(--ink); border-radius:999px; padding:6px 12px; font-weight:700; cursor:pointer; box-shadow:0 3px 0 rgba(0,0,0,.2); }
+    .round.on, .round.sel { background:var(--accent); }
+    .round:hover:not(:disabled) { transform:translateY(-2px); box-shadow:0 5px 0 rgba(0,0,0,.2); }
+    .round:active:not(:disabled) { transform:translateY(2px) scale(.97); box-shadow:0 1px 0 rgba(0,0,0,.2); }
+
+    /* animations des menus et de l'interface */
+    #popPill { pointer-events:auto; cursor:pointer; transition:transform .12s; }
+    #popPill:hover { transform:translateY(-1px) scale(1.04); }
+    .modal { position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; padding:16px; background:rgba(30,24,14,.42); animation:fadeIn .18s ease-out; }
+    .modal .modalBox { background:var(--paper); border:3px solid var(--ink); border-radius:18px; box-shadow:0 8px 0 rgba(0,0,0,.25); max-width:1120px; width:100%; max-height:calc(100vh - 32px); display:flex; flex-direction:column; animation:pop .28s ease-out; }
+    .modal .modalHead { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:2px dashed rgba(74,59,42,.35); font-weight:700; font-size:20px; }
+    .modal .modalSub { font-size:14px; opacity:.65; font-weight:600; flex:1; }
+    .modal .modalBody { overflow:auto; padding:6px 10px 12px; }
+    .modal table { width:100%; border-collapse:collapse; font-size:13px; }
+    .modal th { position:sticky; top:0; background:var(--paper); text-align:left; padding:8px 6px; cursor:pointer; user-select:none; white-space:nowrap; border-bottom:2px solid rgba(74,59,42,.35); }
+    .modal th:hover { color:#2f6e3a; }
+    .modal td { padding:7px 6px; border-bottom:1px solid rgba(74,59,42,.15); white-space:nowrap; }
+    .modal td:nth-child(4) { max-width:170px; overflow:hidden; text-overflow:ellipsis; }
+    .modal tbody tr { cursor:pointer; transition:background .1s; }
+    .modal tbody tr:hover { background:rgba(143,190,90,.25); }
+    .modal tr.sick { background:rgba(214,80,60,.12); }
+    .modal .dot { display:inline-block; width:11px; height:11px; border-radius:50%; margin-right:7px; border:2px solid var(--ink); vertical-align:-1px; }
+    .modal .meter { display:inline-block; width:38px; height:9px; border:2px solid var(--ink); border-radius:999px; background:#fffdf4; overflow:hidden; vertical-align:middle; margin-right:6px; }
+    .modal .meter i { display:block; height:100%; background:#8fbe5a; }
+    .modal .meter i.full { background:#d6503c; }
+    .modal .good { color:#2f6e3a; font-weight:700; }
+    .modal .bad { color:#b8402e; font-weight:700; }
+    .modal .menuBox { max-width:430px; }
+    .modal .mList { display:flex; flex-direction:column; gap:9px; padding:14px 16px 16px; overflow:auto; }
+    .modal .mRow { display:flex; align-items:center; gap:12px; font-weight:700; }
+    .modal .mRow > span:first-child { min-width:92px; }
+    .modal .mRow input[type=range] { flex:1; accent-color:#6fae3f; }
+    .modal .mSeg { display:flex; gap:6px; flex:1; }
+    .modal .mBtn { font:inherit; font-weight:700; text-align:left; padding:10px 14px; border:3px solid var(--ink); border-radius:14px; background:#fffdf4; cursor:pointer; box-shadow:0 3px 0 rgba(0,0,0,.2); transition:transform .1s, background .1s; }
+    .modal .mBtn:hover { background:#f1f6df; transform:translateY(-1px); }
+    .modal .mBtn:active { transform:translateY(2px); box-shadow:none; }
+    .modal .mSeg .mBtn { flex:1; text-align:center; padding:8px 4px; }
+    .modal .mBtn.on { background:#d9eebb; }
+    .modal .mBtn.danger { color:#b8402e; }
+    .modal .mSep { height:0; border-top:2px dashed rgba(74,59,42,.3); margin:4px 0; }
+    .modal .mHelp { font-size:13px; line-height:1.55; padding:8px 12px; background:#fffdf4; border:2px solid rgba(74,59,42,.3); border-radius:12px; }
+    .modal .mHelp b { color:#2f6e3a; }
+    .modal .mNote { font-size:12px; opacity:.6; text-align:center; }
+    @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+    @keyframes menuIn { from { opacity:0; transform:translateX(32px) scale(.94); } to { opacity:1; transform:none; } }
+    @keyframes menuOut { to { opacity:0; transform:translateX(28px) scale(.95); } }
+    @keyframes itemIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+    @keyframes barGrow { from { transform:scaleX(0); } to { transform:scaleX(1); } }
+    @keyframes pop { 0% { opacity:0; transform:translateY(14px) scale(.8); } 70% { transform:translateY(-3px) scale(1.04); } 100% { opacity:1; transform:none; } }
+    @keyframes bump { 0% { transform:scale(1); } 40% { transform:scale(1.18); } 100% { transform:scale(1); } }
+    @keyframes toastIn { from { opacity:0; transform:translateX(-50%) translateY(-16px) scale(.94); } to { opacity:1; transform:translateX(-50%); } }
+    @keyframes toastOut { to { opacity:0; transform:translateX(-50%) translateY(-12px); } }
+    @keyframes tipIn { from { opacity:0; transform:translateX(-50%) translateY(-5px); } to { opacity:1; transform:translateX(-50%); } }
+    #campMenu.in { animation:menuIn .24s cubic-bezier(.2,.9,.3,1.12) both; }
+    #campMenu.out { animation:menuOut .16s ease-in both; pointer-events:none; }
+    #campMenu.in > * { animation:itemIn .3s ease-out both; }
+    #campMenu.in > *:nth-child(1) { animation-delay:.04s; } #campMenu.in > *:nth-child(2) { animation-delay:.07s; }
+    #campMenu.in > *:nth-child(3) { animation-delay:.10s; } #campMenu.in > *:nth-child(4) { animation-delay:.13s; }
+    #campMenu.in > *:nth-child(5) { animation-delay:.16s; } #campMenu.in > *:nth-child(6) { animation-delay:.19s; }
+    #campMenu.in > *:nth-child(7) { animation-delay:.22s; } #campMenu.in > *:nth-child(n+8) { animation-delay:.25s; }
+    #campMenu.in .menuBar i { transform-origin:left center; animation:barGrow .7s cubic-bezier(.2,.8,.2,1) .15s both; }
+    #build.open .piece { animation:pop .38s cubic-bezier(.2,.9,.3,1.2) both; }
+    #build.open .piece:nth-child(1) { animation-delay:.08s; } #build.open .piece:nth-child(2) { animation-delay:.12s; }
+    #build.open .piece:nth-child(3) { animation-delay:.16s; } #build.open .piece:nth-child(4) { animation-delay:.20s; }
+    #build.open .piece:nth-child(5) { animation-delay:.24s; } #build.open .piece:nth-child(6) { animation-delay:.28s; }
+    #build.open .piece:nth-child(7) { animation-delay:.32s; } #build.open .piece:nth-child(n+8) { animation-delay:.36s; }
+    .piece { transition:transform .12s ease, background .15s ease; }
+    .piece small { white-space:pre-line; text-align:center; line-height:1.25; font-weight:700; }
+    .piece:hover { transform:translateY(-3px); }
+    .pill.bump { animation:bump .38s ease-out; }
+    #toast.show { animation:toastIn .32s cubic-bezier(.2,.9,.3,1.2) both; }
+    #toast.hide { animation:toastOut .25s ease-in both; }
+    #cellInfo { animation:tipIn .14s ease-out; }
+    #menuBtn { position:fixed; top:12px; right:12px; font-weight:700; }
+    #minimap { position:fixed; bottom:12px; left:12px; width:180px; height:180px; border:3px solid var(--ink); border-radius:14px; box-shadow:0 3px 0 rgba(0,0,0,.25); cursor:crosshair; background:#0e5087; touch-action:none; opacity:.5; transition:opacity .2s; }
+    #minimap:hover { opacity:1; }
+    #calendar { position:fixed; left:12px; bottom:206px; width:186px; box-sizing:border-box; background:var(--paper); border:3px solid var(--ink); border-radius:14px; padding:6px 10px 7px; box-shadow:0 3px 0 rgba(0,0,0,.25); display:flex; flex-direction:column; gap:3px; pointer-events:auto; opacity:.55; transition:opacity .2s; }
+    #calendar:hover { opacity:1; }
+    #calendar .calTop { display:flex; justify-content:space-between; align-items:center; font-weight:700; font-size:15px; }
+    #calendar .calTime { font-variant-numeric:tabular-nums; }
+    #calendar .calDate { font-size:12px; opacity:.7; }
+    #calendar .calBar { height:7px; border:2px solid var(--ink); border-radius:999px; background:#fffdf4; overflow:hidden; }
+    #calendar .calBar i { display:block; height:100%; width:0; background:#8fbe5a; transition:width .6s ease; }
+    @media (max-width:560px) { #calendar { bottom:146px; width:126px; } #calendar .calDate { display:none; } }
+    @media (max-width:560px) { #minimap { width:120px; height:120px; } }
+    #loading { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; font-size:26px; font-weight:700; color:#e8f6fb; background:#0e5087; z-index:20; }
+    #campMenu { position:fixed; top:64px; right:12px; max-height:calc(100vh - 150px); overflow-y:auto; display:none; flex-direction:column; gap:6px; background:var(--paper); border:3px solid var(--ink); border-radius:16px; padding:10px; box-shadow:0 4px 0 rgba(0,0,0,.25); z-index:6; min-width:250px; max-width:290px; }
+    #campMenu .menuTitle { font-weight:700; font-size:16px; padding-bottom:4px; border-bottom:2px dashed rgba(74,59,42,.35); }
+    #campMenu .menuTitle.sub { font-size:14px; margin-top:4px; }
+    #campMenu .menuRow.ok { color:#2e7d32; font-weight:700; }
+    #campMenu .menuRow.warn { color:#b3261e; font-weight:700; }
+    #campMenu .menuRow { font-size:15px; font-weight:700; }
+    #campMenu .menuRow.small { font-size:13px; font-weight:400; }
+    #campMenu .menuBar { height:14px; border:3px solid var(--ink); border-radius:999px; background:#fffdf4; overflow:hidden; }
+    #campMenu .menuBar i { display:block; height:100%; background:#8fbe5a; }
+    #campMenu .menuBar i.full { background:#d6563b; }
+    #campMenu .menuRow.tiny { font-size:12px; font-weight:400; opacity:.65; margin:-2px 0 -4px; font-style:italic; }
+    #campMenu .menuRow.link { cursor:pointer; font-style:normal; text-decoration:underline dotted; opacity:.8; }
+    #campMenu .menuRow.link:hover { opacity:1; color:#1f5fa0; }
+    #campMenu .jobList { display:flex; flex-direction:column; gap:4px; max-height:220px; overflow-y:auto; padding-left:6px; border-left:3px solid rgba(74,59,42,.3); }
+    #campMenu .jobOpt { font-size:13px; padding:5px 10px; }
+    #campMenu .mCrew { display:flex; flex-direction:column; gap:5px; margin-top:4px; padding-top:7px; border-top:2px dashed rgba(74,59,42,.35); }
+    #campMenu .mCrewTitle { font-weight:700; font-size:14px; }
+    #campMenu .mNone { font-size:13px; opacity:.55; font-style:italic; }
+    #campMenu .mWork { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    #campMenu .mWho { display:flex; flex-direction:column; line-height:1.15; }
+    #campMenu .mWhoName { font-weight:700; font-size:14px; }
+    #campMenu .mAct { font-size:12px; opacity:.7; }
+    #campMenu .mAct.idle { font-style:italic; opacity:.55; }
+    #campMenu .mFire { font-size:12px; padding:3px 10px; }
+    #campMenu .mFire:hover { background:#fbe4df; }
+    #campMenu .mStep { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:2px; }
+    #campMenu .mStepLabel { font-weight:700; font-size:15px; }
+    #campMenu .mCtl { display:flex; align-items:center; gap:6px; }
+    #campMenu .mStepBtn { width:30px; height:30px; padding:0; font-size:18px; line-height:1; }
+    #campMenu .mStepBtn:hover { background:var(--accent); }
+    #campMenu .mStepVal { min-width:26px; text-align:center; font-weight:700; font-size:16px; font-variant-numeric:tabular-nums; }
+    #campMenu .menuActions { display:flex; flex-direction:row; gap:8px; margin-top:6px; padding-top:8px; border-top:2px dashed rgba(74,59,42,.35); }
+    #campMenu .menuBtn { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; font-size:14px; padding:6px 8px; min-height:44px; }
+    #campMenu .menuBtn small { font-size:11px; font-weight:400; opacity:.75; }
+    #campMenu .menuBtn:hover:not(:disabled) { background:var(--accent); }
+    #campMenu .menuBtn:disabled { opacity:.45; cursor:not-allowed; }
+    #campMenu .mHead { display:flex; align-items:center; gap:9px; padding-bottom:6px; border-bottom:2px dashed rgba(74,59,42,.35); }
+    #campMenu .mEmoji { font-size:26px; line-height:1; }
+    #campMenu .mAge { font-size:14px; font-weight:700; opacity:.6; margin-left:-3px; }
+    #campMenu .mAside { margin-left:auto; font-size:14px; font-weight:700; opacity:.75; text-align:right; }
+    #campMenu .mWhoBtn { font:inherit; font-weight:700; color:inherit; background:none; border:0; padding:0 2px; cursor:pointer; text-decoration:underline dotted; }
+    #campMenu .mWhoBtn:hover { opacity:.7; }
+    #campMenu .mTitle { font-weight:700; font-size:18px; }
+    #campMenu .mChips { display:flex; flex-wrap:wrap; gap:5px; }
+    #campMenu .mChip { font-size:12px; font-weight:700; border-radius:999px; padding:2px 9px; border:2px solid; }
+    #campMenu .mChip.ok { color:#2e7d32; background:#e6f3dc; border-color:#8fbe5a; }
+    #campMenu .mChip.bad { color:#b3261e; background:#fbe4df; border-color:#e08a7c; }
+    #campMenu .mChip.idle { color:#6b5a45; background:#efe8d6; border-color:#cbbd9c; }
+    #campMenu .mStat { display:flex; justify-content:space-between; gap:12px; font-size:15px; font-weight:700; }
+    #campMenu .mVal { font-variant-numeric:tabular-nums; }
+    #campMenu .menuItem { text-align:left; font-size:15px; }
+    #campMenu .menuItem:hover:not(:disabled) { background:var(--accent); }
+    #campMenu .menuItem:disabled { opacity:.5; cursor:not-allowed; }
+    #crew { position:fixed; top:58px; left:12px; display:flex; flex-direction:column; gap:6px; max-width:calc(100vw - 230px); }
+    .crewRow { display:flex; flex-wrap:wrap; gap:6px; }
+    .crewBtn { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; font-size:14px; }
+    .crewBtn i { width:14px; height:14px; border-radius:50%; border:2px solid var(--ink); display:inline-block; }
+    .crewBtn:disabled { opacity:.5; cursor:not-allowed; }
+    .crewInfo { background:var(--paper); border:3px solid var(--ink); border-radius:14px; padding:6px 10px; font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px; flex-wrap:wrap; box-shadow:0 3px 0 rgba(0,0,0,.2); }
+    .crewInfo small { font-weight:400; opacity:.8; }
+    #cellInfo { position:fixed; top:12px; left:50%; transform:translateX(-50%); background:var(--paper); border:3px solid var(--ink); border-radius:999px; padding:4px 14px; font-size:14px; font-weight:700; box-shadow:0 3px 0 rgba(0,0,0,.2); pointer-events:none; display:none; }
+    #cellInfo.bad { color:#b3261e; }
+    #buildBtn { position:fixed; bottom:14px; right:14px; font-size:18px; padding:8px 16px; }
+
+    .float { position:fixed; transform:translate(-50%,-50%); font-weight:700; font-size:22px; color:var(--paper); -webkit-text-stroke:5px var(--ink); paint-order:stroke fill; pointer-events:none; animation:rise .9s ease-out forwards; }
+    @keyframes rise { to { transform:translate(-50%,-150%); opacity:0; } }
+
+    #toast { position:fixed; top:64px; left:50%; transform:translateX(-50%); background:var(--paper); border:3px solid var(--ink); border-radius:14px; padding:8px 14px; font-weight:700; box-shadow:0 3px 0 rgba(0,0,0,.2); max-width:86vw; text-align:center; display:none; z-index:5; }
+
+    #build { position:fixed; left:0; right:0; bottom:0; background:var(--paper); border-top:3px solid var(--ink); padding:8px 10px 10px; display:flex; flex-direction:column; gap:6px; transform:translateY(110%); opacity:0; visibility:hidden; pointer-events:none; transition:transform .32s cubic-bezier(.2,.9,.3,1.08), opacity .2s, visibility 0s .32s; }
+    #build.open { transform:none; opacity:1; visibility:visible; pointer-events:auto; transition:transform .32s cubic-bezier(.2,.9,.3,1.08), opacity .2s, visibility 0s; }
+    #buildTools { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+    #buildTip { font-size:13px; flex:1; min-width:160px; }
+    #pieces { display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; }
+    .piece { flex:0 0 auto; width:84px; background:#fffdf4; border:3px solid var(--ink); border-radius:12px; padding:4px; display:flex; flex-direction:column; align-items:center; cursor:pointer; }
+    .piece span { font-size:12px; font-weight:700; line-height:1.1; text-align:center; }
+    .piece small { font-size:11px; opacity:.8; }
+    .piece.sel { background:var(--accent); }
+    .piece.locked { opacity:.45; filter:grayscale(.7); }
+    .piece.poor small { color:#b3261e; font-weight:700; }
+
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="loading">Création de l'île…</div>
+  <div class="hud">
+    <div class="pill">🪙 <span id="coins">0</span></div>
+    <div class="pill" id="popPill">👥 <span id="pop">1 / 0</span></div>
+    <span id="goods"></span>
+  </div>
+  <button id="menuBtn" class="round" title="Menu (Échap)">☰ Menu</button>
+  <div id="calendar">
+    <div class="calTop"><span class="calSeason"><span id="seasonIcon">🌸</span> <span id="seasonName">Printemps</span></span><span class="calTime"><span id="clockIcon">☀️</span> <span id="clock">08:00</span></span></div>
+    <div class="calDate" id="calDate">Jour 1 · année 1</div>
+    <div class="calBar"><i id="calBar"></i></div>
+  </div>
+  <canvas id="minimap"></canvas>
+  <div id="crew"></div>
+  <div id="campMenu"></div>
+  <div id="cellInfo"></div>
+  <button id="buildBtn" class="round">🔨 Construire</button>
+
+  <div id="folkModal" class="modal" hidden>
+    <div class="modalBox">
+      <div class="modalHead"><span>👥 Villageois</span><span class="modalSub" id="folkSub"></span><button id="folkClose" class="round">✕ Fermer</button></div>
+      <div class="modalBody" id="folkBody"></div>
+    </div>
+  </div>
+  <div id="menuModal" class="modal" hidden>
+    <div class="modalBox menuBox">
+      <div class="modalHead"><span>☰ Menu</span><span class="modalSub" id="menuSub"></span><button id="menuClose" class="round">✕</button></div>
+      <div class="mList" id="menuBody"></div>
+    </div>
+  </div>
+  <input type="file" id="importFile" accept=".json,application/json" hidden />
+  <div id="toast"></div>
+
+  <div id="build">
+    <div id="buildTools">
+      <button id="erase" class="round">🗑 Démolir</button>
+      <button id="rotate" class="round">↻ Tourner (R ou clic droit)</button>
+      <span id="buildTip"></span>
+      <button id="closeBuild" class="round">Fermer</button>
+    </div>
+    <div id="pieces"></div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

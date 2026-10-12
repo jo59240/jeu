@@ -1,0 +1,3680 @@
+import { Animal, POPULATION, Species } from "./animals";
+import { play, Cue, getVolume, isSoundOff, setSoundOff, setVolume } from "./sound";
+import { CHURCH_GRAVES, AGE_ELDER, HEAL_LEVELS, PREVENT_RESERVE, XP_BREW, XP_CURE, XP_PREVENT, XP_TREAT, CLINIC_BERRY_CAP, CLINIC_HONEY_CAP, CLINIC_REMEDY_CAP, ILLNESSES, REMEDIES, RemedyKind, SICK_BED, DEPOT_LEVELS, JOBS, LUMBER_RADIUS, NEED_BAD, WorkplaceKind } from "./balance";
+import { DAY_SEC, DEPARTURE_RETURN_SEC, HOME_OK_NUISANCE, HOME_RETURN_OK, LEAVE_AFTER_SEC, MOOD, REPOP_SEC, SEASON_DAYS, TEND_BELOW } from "./balance";
+import { DEMO, FISH_COOLDOWN_MS, GRID, SAVE_KEY } from "./config";
+import { CROPS, CROP_BY_ID } from "./crops";
+import { C, drawCamp, drawDepot, drawSawmill, drawWell, drawLodge, drawButcher, drawPort, drawShip, drawApiary, drawClinic, drawChurch, drawCorpse, drawEntrance, drawHouse, drawRoadCell, drawRoads, drawSite, drawTile } from "./draw";
+import { GOOD_EMOJIS } from "./goods";
+import { TerrainRenderer } from "./mapdraw";
+import { findPath, roadRoute } from "./path";
+import { STRUCTURES } from "./structures";
+import { TERRAIN_LABELS, isWater, objects, terrainAt } from "./world";
+import { BuildRoute, HaulRoute, HealPlan, BuryPlan, WaterRoute, Worker, WorkerEnv } from "./worker";
+import { Zone, zoneBounds } from "./zone";
+import {
+  Action, BuildResult, CAMP_CAPACITY, Camp, CREW_COLORS, FEMALE_NAMES, DEPOT_CAPACITY, Depot, MAX_CREW, ARRIVAL_SEC, addVillager, Pos, Save, addToDepot, campAt, campEntrance, depotEntrance, depotFree, depotCapacity, depotLevel, upgradeDepot, woodStock,
+  clockHour, clockDay, darkness, seasonAt, tickDiscontent, DiscontentEvent, nuisanceLevel, houseMood, moodAt, nuisancePen, nuisanceSources, housesNear, NuisanceKey,
+  Church, churchAt, churchEntrance, placeChurch, removeChurch, canPlaceChurch, gravesFree, tickCorpses, spawnCorpse,
+  Clinic, clinicAt, clinicEntrance, placeClinic, removeClinic, canPlaceClinic, addClinicStock, brewable, brew, bestRemedy, applyRemedy, infect, tickHealth, HealthEvent, healSkill, protectVillager, clearBerries, isBerryGone, tickAging, AgeEvent, WorkerSave,
+  houseHungry, tickHunger, takeCuts, addFood, HOUSE_FOOD_CAP, isPicked, pickBush, addBerriesToDepot, berryStock,
+  Apiary, apiaryAt, apiaryEntrance, placeApiary, removeApiary, canPlaceApiary, tickApiaries, tendApiary, harvestApiary, addHoneyToDepot, honeyStock, apiaryBusy, HONEY_CAP, PRICE_HONEY, PRICE_BERRIES,
+  Port, portAt, portEntrance, portRot, placePort, removePort, canPlacePort, addToPort, portFree, portSpace, portAccepts, tickPorts, exportableAt, PORT_CAP, PORT_QUOTA_DEFAULT, PRICE_PLANK, PRICE_CUTS, SHIP_CYCLE, SHIP_ARRIVE, SHIP_DOCKED, SHIP_DEPART,
+  Butcher, butcherAt, butcherEntrance, placeButcher, removeButcher, canPlaceButcher, addRawMeat, takeMeat, butcherWorking, tickButchers, cutsStock, HaulDest, haulDest,
+  BUTCHER_MEAT_CAP, BUTCHER_CUTS_CAP, CUT_SEC,
+  Lodge, lodgeAt, lodgeEntrance, placeLodge, removeLodge, canPlaceLodge, addMeat, lodgeFree, meatStock, HUNT_RADIUS, LODGE_CAP,
+  WELL_CAP, Well, wellAt, wellEntrance, placeWell, removeWell, canPlaceWell, tickWells, tickThirst, takeWater, addWater, houseThirsty, HOUSE_WATER_CAP,
+  Sawmill, sawmillAt, sawmillEntrance, placeSawmill, removeSawmill, canPlaceSawmill, addLogs, takePlanks, sawmillWorking, tickSawmills, planksStock,
+  SAWMILL_LOGS_CAP, SAWMILL_PLANKS_CAP, LOGS_PER_PLANK, PLANK_SEC, siteRefund, refundPlanks,
+  rotateBuilding, dismantleGain, startDismantle, tickDismantle, CAMP_COST, DEPOT_WOOD, HOUSE_COST, HOUSE_WOOD,
+  House, HOUSE_CAPACITY, houseAt, houseEntrance, placeHouse, removeHouse, canPlaceHouse,
+  Site, addToSite, removeSite, siteAt, siteEntrance, siteMissing, siteReady, siteSize, workCell, workOnSite,
+  canBuild, canPlaceCamp, canPlaceDepot, canPlaceRoad, catchFish, chopTree, depositAtCamp, depotAt, felTree, growth, interact,
+  isEntrance, isFelled, load, newSave, persist, placeCamp, placeDepot, placeRoad, recruit, recruitCost, removeCamp, removeDepot, removeRoad,
+  roadAt, storageCapacity, storageFree, addPlanksToDepot, addCutsToDepot, walkable,
+} from "./state";
+import { BuildUI, BuildView, ERASE, toast } from "./ui";
+
+const BUILD_MESSAGES: Record<Exclude<BuildResult, "ok">, string> = {
+  poor: "Pas assez de pièces",
+  blocked: "Emplacement occupé (culture, structure ou chemin)",
+  terrain: "Terrain impropre : eau, forêt, rocher ou sable",
+};
+
+const ACTION_MESSAGES: Record<Action, string> = {
+  plow: "Labouré !",
+  plant: "Semé !",
+  harvest: "Récolté !",
+  growing: "Ça pousse…",
+  poor: "Pas assez de pièces",
+  blocked: "Terrain impropre : eau, forêt, rocher, structure ou chemin",
+};
+
+const WOOD_RADIUS = 5; // rayon des zones rondes des paramètres de test (?assign, ?wood)
+const MINI = 180; // côté de la minicarte, en pixels
+const notNull = <T,>(v: T | null): v is T => v !== null;
+const sameCell = (a: Pos, b: Pos) => a.gx === b.gx && a.gy === b.gy;
+
+interface Press {
+  sx: number;
+  sy: number;
+  camX: number;
+  camY: number;
+  moved: boolean;
+  button: number;
+}
+
+// Cases traversées par le segment a → b (a exclue, b incluse) : on trace un chemin au glisser sans trou.
+function cellsBetween(a: Pos, b: Pos): Pos[] {
+  const out: Pos[] = [];
+  let x = a.gx;
+  let y = a.gy;
+  const dx = Math.abs(b.gx - a.gx);
+  const dy = Math.abs(b.gy - a.gy);
+  const sx = a.gx < b.gx ? 1 : -1;
+  const sy = a.gy < b.gy ? 1 : -1;
+  let err = dx - dy;
+  while (x !== b.gx || y !== b.gy) {
+    const e2 = 2 * err;
+    // on avance d'un seul axe à la fois : le chemin reste « en escalier », sans coupe en diagonale
+    if (e2 > -dy && (e2 < dx || dx >= dy)) {
+      err -= dy;
+      x += sx;
+    } else {
+      err += dx;
+      y += sy;
+    }
+    out.push({ gx: x, gy: y });
+  }
+  return out;
+}
+
+export class Game {
+  private g: CanvasRenderingContext2D;
+  private dpr = 1;
+  private w = 1;
+  private h = 1;
+  private cam = { x: (GRID * C) / 2, y: (GRID * C) / 2, zoom: 1 };
+  private terrain!: TerrainRenderer;
+  private mini!: HTMLCanvasElement;
+  private splashes: { x: number; y: number; t0: number }[] = []; // éclaboussures de pêche
+  private lastFish = 0;
+
+  private save!: Save;
+  private workers: Worker[] = [];
+  private animals: Animal[] = []; // animaux sauvages qui se promènent (pas sauvegardés)
+  private selected: Worker | null = null;
+  private berryList: number[] | null = null; // indices des arbustes à baies (tous, pour la cueillette)
+  private claimed = new Set<number>(); // arbres déjà visés par un bûcheron
+  private env!: WorkerEnv;
+  private campSel: Camp | null = null; // camp sélectionné : son menu est ouvert
+  private depotSel: Depot | null = null; // dépôt sélectionné : son menu est ouvert
+  private recruitOpen = false; // menu d'un bâtiment : la liste des villageois sans emploi est dépliée
+  private jobMenuOpen = false; // menu du villageois : la liste des travaux possibles est dépliée
+  private churchSel: Church | null = null; // église sélectionnée : son menu est ouvert
+  private buryClaims = new Map<number, number>(); // fossoyeur → défunt qu'il va chercher
+  private clinicSel: Clinic | null = null; // maison du soigneur sélectionnée : son menu est ouvert
+  private healClaims = new Map<number, number>(); // soigneur → malade dont il s'occupe
+  private apiarySel: Apiary | null = null; // rucher sélectionné : son menu est ouvert
+  private portSel: Port | null = null; // port sélectionné : son menu est ouvert
+  private butcherSel: Butcher | null = null; // boucherie sélectionnée : son menu est ouvert
+  private lodgeSel: Lodge | null = null; // camp de chasseur sélectionné : son menu est ouvert
+  private animalK = 1; // multiplicateur de faune (?animals=)
+  private popT = REPOP_SEC; // prochain renouvellement de la faune
+  private preyClaimed = new Set<number>(); // gibier déjà visé par un chasseur
+  private wellSel: Well | null = null; // puits sélectionné : son menu est ouvert
+  private sawmillSel: Sawmill | null = null; // scierie sélectionnée : son menu est ouvert
+  private houseSel: House | null = null; // maison sélectionnée : son menu est ouvert
+  private buildRot = 0; // orientation de la structure qu'on s'apprête à poser (quarts de tour)
+  private errandT = 0; // prochain coup d'œil aux réserves des maisons
+  private leavers: { w: Worker; t: number }[] = []; // villageois qui quittent le village : ils s'éloignent puis s'effacent
+  private arrivalT = 0; // temps écoulé avec une place libre en maison
+  private arrivalSec = ARRIVAL_SEC;
+  private homeT = 0; // prochaine répartition des logements
+  private siteSel: Site | null = null; // chantier sélectionné : son menu est ouvert
+  private menuSig = "";
+  private crewSig = "";
+  private goodsSig = "";
+  private seasonSeen = -1; // dernière saison annoncée (message à chaque changement)
+  private clockStep = -1; // dernier palier de 5 s de l'horloge sauvegardé
+  private goodsPrev: string[] = []; // pastilles de l'en-tête au dernier affichage : celles qui changent rebondissent
+  private menuKey = ""; // quel menu est affiché : un autre bâtiment rejoue l'animation d'entrée
+  private menuHideT = 0;
+  private menuInT = 0;
+  private dirtyAt = 0; // l'équipe a changé : sauvegarde différée
+
+  private tool = "walk"; // outil actif : "walk" (sélection et déplacements) ou une graine à semer
+  private crop = "carrot";
+  private build: BuildView = { open: false, selected: null };
+  private ui!: BuildUI;
+  private roadPaint: { mode: "road" | "erase"; last: Pos } | null = null; // chemin en cours de tracé au glisser
+  private zoneDrag: { x0: number; y0: number; x1: number; y1: number; sx: number; sy: number } | null = null; // zone tracée au clic droit maintenu
+  private follow = false; // la caméra suit le personnage pendant qu'il marche
+  private lastT = 0;
+  private update: UpdateInfo | null = null; // application de bureau : état de la mise à jour
+  private paused = false; // le tableau des villageois est ouvert : le temps s'arrête
+  private folkSort: { key: string; dir: 1 | -1 } = { key: "name", dir: 1 };
+  private timeScale = 1; // essais : ?speed=n fait tourner la simulation n fois plus vite
+  private userCam = false; // caméra imposée par l'adresse (tests) : on ne la recadre pas
+
+  private press: Press | null = null;
+  private mouse: { x: number; y: number; inside: boolean } = { x: 0, y: 0, inside: false };
+
+  constructor(private canvas: HTMLCanvasElement) {
+    this.g = canvas.getContext("2d")!;
+  }
+
+  start() {
+    this.save = load();
+    const q = new URLSearchParams(location.search);
+    // Test : ?demo=crops sème les 4 cultures à 3 stades de croissance.
+    if (DEMO === "crops") {
+      const now = Date.now();
+      CROPS.forEach((c, r) =>
+        [0.1, 0.6, 1].forEach((p, k) => {
+          this.save.cells[(GRID / 2 + 4 + r * 2) * GRID + (GRID / 2 + 4 + k * 2)] = { kind: "crop", crop: c.id, plantedAt: now - p * c.growMs, readyAt: now + (1 - p) * c.growMs };
+        }),
+      );
+    }
+
+    this.workers = this.save.workers.map((d) => new Worker(d));
+    this.migrateEmployment();
+    this.spawnAnimals(q);
+    // Au départ rien n'est sélectionné. Les paramètres de test (?goto, ?role, ?wood, ?assign, ?sel, ?haul) sélectionnent le premier personnage.
+    const testKeys = ["goto", "role", "wood", "assign", "sel", "haul", "haulsaw", "waterjob", "hunt", "haulbutcher", "haulany", "lumber", "bee", "foodjob", "builder", "gather", "heal", "bury"];
+    this.selected = testKeys.some((k) => q.has(k)) ? this.workers[0] : null;
+    this.env = this.makeEnv();
+    this.cam.x = this.workers[0].x * C;
+    this.cam.y = this.workers[0].y * C;
+    this.terrain = new TerrainRenderer();
+    this.mini = this.terrain.minimap(MINI);
+    this.bindMinimap();
+    this.ui = new BuildUI(
+      {
+        onToggle: (open) => {
+          this.build.open = open;
+          if (!open) this.build.selected = null;
+        },
+        onSelect: (id) => {
+          this.build.selected = id;
+        },
+      },
+      () => this.build,
+    );
+    this.bindInput();
+    window.addEventListener("resize", () => this.resize(true));
+    this.resize(true);
+    this.applyTestParams(q);
+    document.getElementById("loading")?.remove();
+    requestAnimationFrame((t) => this.frame(t));
+  }
+
+  // La faune du départ : lapins dans les prés, cerfs à la lisière, sangliers en forêt. ?animals=0 les retire, ?animals=2 les double ;
+  // ?zoo=x,y en pose un de chaque près de cette case.
+  private spawnAnimals(q: URLSearchParams) {
+    const k = Number(q.get("animals") ?? 1);
+    this.animalK = k;
+    for (const kind of Object.keys(POPULATION) as Species[]) {
+      for (let i = 0; i < Math.round(POPULATION[kind] * k); i++) {
+        const a = Animal.spawn(this.save, kind);
+        if (a) this.animals.push(a);
+      }
+    }
+    const zoo = q.get("zoo")?.split(",").map(Number);
+
+    if (zoo?.length === 2) {
+      for (const kind of Object.keys(POPULATION) as Species[]) {
+        const a = Animal.spawn(this.save, kind, { x: zoo[0], y: zoo[1], r: 2.5 });
+        if (a) this.animals.push(a);
+      }
+    }
+  }
+
+  // La faune se renouvelle : toutes les 12 s, une espèce qui manque d'individus en gagne un, loin des villageois.
+  private repopulate() {
+    for (const kind of Object.keys(POPULATION) as Species[]) {
+      if (this.animals.filter((a) => a.kind === kind).length >= Math.round(POPULATION[kind] * this.animalK)) continue;
+      for (let t = 0; t < 12; t++) {
+        const a = Animal.spawn(this.save, kind);
+        if (!a) continue;
+        if (this.workers.some((w) => !w.inside && Math.hypot(w.x - a.x, w.y - a.y) < 12)) continue;
+        this.animals.push(a);
+        break;
+      }
+    }
+  }
+
+  // Paramètres d'adresse pour les essais : on y pose des structures, on place la caméra, etc.
+  private applyTestParams(q: URLSearchParams) {
+    const nums = (k: string) => q.get(k)?.split(",").map(Number);
+    this.timeScale = Math.max(1, Number(q.get("speed") ?? 1));
+    this.arrivalSec = Number(q.get("arrival") ?? ARRIVAL_SEC); // essais : ?arrival=5
+    if (q.get("season")) this.save.clock = ((Number(q.get("season")) * SEASON_DAYS + 0.4) * 24 - 6) / 24 * DAY_SEC; // essais : ?season=0 printemps, 1 été, 2 automne, 3 hiver
+    if (q.get("time")) {
+      // essais : ?time=22 pour 22 h, dans le jour (et la saison) en cours
+      const days = Math.floor((this.save.clock / DAY_SEC * 24 + 6) / 24);
+      this.save.clock = ((days * 24 + ((Number(q.get("time")) - 6 + 24) % 24)) / 24) * DAY_SEC;
+    }
+    this.recruitOpen = !!q.get("recruitmenu"); // essais : ?recruitmenu=1 déplie la liste de recrutement
+    if (q.get("energy")) for (const w of this.workers) w.data.energy = Number(q.get("energy")); // essais : ?energy=10
+    if (q.get("discontent")) for (const w of this.workers) w.data.discontent = Number(q.get("discontent")); // essais : ?discontent=99
+    this.jobMenuOpen = !!q.get("jobmenu"); // essais : ?jobmenu=1 déplie la liste des travaux
+    const cam = nums("cam");
+    if (cam && cam.length === 3) {
+      this.cam = { x: cam[0] * C, y: cam[1] * C, zoom: Math.max(this.minZoom(), cam[2]) };
+      this.userCam = true;
+    }
+    for (let i = this.workers.length; i < Number(q.get("crew") ?? 0); i++) {
+      const d = recruit(this.save);
+      if (d) this.workers.push(new Worker(d));
+    }
+    this.save.coins = ["camp", "depot", "road", "sitecamp", "sitedepot", "house", "sitehouse", "sawmill", "sitesawmill", "well", "sitewell", "lodge", "sitelodge", "butcher", "sitebutcher", "port", "siteport", "apiary", "siteapiary", "clinic", "siteclinic", "church", "sitechurch"].some((k) => q.has(k)) ? Math.max(this.save.coins, 300) : this.save.coins;
+    // ?camp / ?depot : bâtiment déjà construit ; ?sitecamp / ?sitedepot : seulement les fondations
+    const rot = Number(q.get("rot") ?? 0);
+    const camp = nums("camp");
+    if (camp?.length === 2) placeCamp(this.save, camp[0], camp[1], true, rot);
+    const depot = nums("depot");
+    if (depot?.length === 2) placeDepot(this.save, depot[0], depot[1], true, rot);
+    const sawmill = nums("sawmill");
+    if (sawmill?.length === 2) placeSawmill(this.save, sawmill[0], sawmill[1], true, rot);
+    const sitesawmill = nums("sitesawmill");
+    if (sitesawmill?.length === 2) placeSawmill(this.save, sitesawmill[0], sitesawmill[1], false, rot);
+    if (q.get("logs") && this.save.sawmills[0]) this.save.sawmills[0].logs = Number(q.get("logs"));
+    if (q.get("planks") && this.save.sawmills[0]) this.save.sawmills[0].planks = Number(q.get("planks"));
+    if (q.get("sawmenu")) this.sawmillSel = this.save.sawmills[0] ?? null;
+    const apiary = nums("apiary");
+    if (apiary?.length === 2) placeApiary(this.save, apiary[0], apiary[1], true, rot);
+    const clinicAtXY = nums("clinic");
+    if (clinicAtXY?.length === 2) placeClinic(this.save, clinicAtXY[0], clinicAtXY[1], true, rot);
+    const churchAtXY = nums("church");
+    if (churchAtXY?.length === 2) placeChurch(this.save, churchAtXY[0], churchAtXY[1], true, rot);
+    const sitechurch = nums("sitechurch");
+    if (sitechurch?.length === 2) placeChurch(this.save, sitechurch[0], sitechurch[1], false, rot);
+    const siteclinic = nums("siteclinic");
+    if (siteclinic?.length === 2) placeClinic(this.save, siteclinic[0], siteclinic[1], false, rot);
+    const cs = (q.get("clinicstock") ?? "").split(",").map(Number); // ?clinicstock=baies,miel,tisanes,sirops
+    if (this.save.clinics[0] && cs.length >= 2) Object.assign(this.save.clinics[0], { berries: cs[0] || 0, honey: cs[1] || 0, tisane: cs[2] || 0, syrup: cs[3] || 0 });
+    for (let i = 0; i < Number(q.get("corpse") ?? 0); i++) spawnCorpse(this.save, { ...this.save.workers[0], home: this.save.houses[0]?.id ?? null, x: 96 + i, y: 100 }, i % 2 ? "fièvre" : "vieillesse"); // ?corpse=n : des défunts devant la première maison
+    for (let i = 0; i < Number(q.get("graves") ?? 0) && this.save.churches[0]; i++) this.save.churches[0].graves.push({ name: ["Anne", "Paul", "Zoé", "Luc"][i % 4], age: 60 + i, cause: i % 2 ? "fièvre" : "vieillesse", color: i % 6 });
+    if (q.get("churchmenu")) this.churchSel = this.save.churches[0] ?? null;
+    if (q.get("clinicmenu")) this.clinicSel = this.save.clinics[0] ?? null;
+    const sickKind = q.get("sick") as keyof typeof ILLNESSES | null; // ?sick=cold|poison|fever|flu&sickn=2&sev=40
+    if (sickKind && ILLNESSES[sickKind]) for (let i = 0; i < Number(q.get("sickn") ?? 1) && i < this.save.workers.length - 1; i++) infect(this.save.workers[this.save.workers.length - 1 - i], sickKind, Number(q.get("sev") ?? 20)); // les derniers arrivés : le premier peut être le soigneur
+    if (q.get("sickself") && this.save.workers[0]) infect(this.save.workers[0], (q.get("sickself") as keyof typeof ILLNESSES) in ILLNESSES ? (q.get("sickself") as keyof typeof ILLNESSES) : "fever", Number(q.get("sev") ?? 60)); // ?sickself=fever : le premier villageois (le soigneur) est malade
+    const siteapiary = nums("siteapiary");
+    if (siteapiary?.length === 2) placeApiary(this.save, siteapiary[0], siteapiary[1], false, rot);
+    if (q.get("honey") && this.save.apiaries[0]) this.save.apiaries[0].honey = Number(q.get("honey"));
+    if (q.get("care") && this.save.apiaries[0]) this.save.apiaries[0].care = Number(q.get("care"));
+    if (q.get("apiarymenu")) this.apiarySel = this.save.apiaries[0] ?? null;
+    const port = nums("port");
+    if (port?.length === 2) placePort(this.save, port[0], port[1], true);
+    const siteport = nums("siteport");
+    if (siteport?.length === 2) placePort(this.save, siteport[0], siteport[1]);
+    if (q.get("portstock") && this.save.ports[0]) Object.assign(this.save.ports[0], { planks: Number(q.get("portstock")), cuts: Number(q.get("portstock")) });
+    if (q.get("shipt") && this.save.ports[0]) this.save.ports[0].t = Number(q.get("shipt")) * SHIP_CYCLE;
+    if (q.get("quota") && this.save.ports[0]) Object.assign(this.save.ports[0], { quotaPlanks: Number(q.get("quota")), quotaCuts: Number(q.get("quota")), quotaHoney: Number(q.get("quota")), quotaBerries: Number(q.get("quota")) });
+    if (q.get("portmenu")) this.portSel = this.save.ports[0] ?? null;
+    const butcher = nums("butcher");
+    if (butcher?.length === 2) placeButcher(this.save, butcher[0], butcher[1], true, rot);
+    const sitebutcher = nums("sitebutcher");
+    if (sitebutcher?.length === 2) placeButcher(this.save, sitebutcher[0], sitebutcher[1], false, rot);
+    if (q.get("rawmeat") && this.save.butchers[0]) this.save.butchers[0].meat = Number(q.get("rawmeat"));
+    if (q.get("cuts") && this.save.butchers[0]) this.save.butchers[0].cuts = Number(q.get("cuts"));
+    if (q.get("butchermenu")) this.butcherSel = this.save.butchers[0] ?? null;
+    const lodge = nums("lodge");
+    if (lodge?.length === 2) placeLodge(this.save, lodge[0], lodge[1], true, rot);
+    const sitelodge = nums("sitelodge");
+    if (sitelodge?.length === 2) placeLodge(this.save, sitelodge[0], sitelodge[1], false, rot);
+    if (q.get("lodgemeat") && this.save.lodges[0]) this.save.lodges[0].meat = Number(q.get("lodgemeat"));
+    if (q.get("lodgemenu")) this.lodgeSel = this.save.lodges[0] ?? null;
+    const well = nums("well");
+    if (well?.length === 2) placeWell(this.save, well[0], well[1], true, rot);
+    const sitewell = nums("sitewell");
+    if (sitewell?.length === 2) placeWell(this.save, sitewell[0], sitewell[1], false, rot);
+    if (q.get("wellmenu")) this.wellSel = this.save.wells[0] ?? null;
+    const house = nums("house");
+    if (house?.length === 2) placeHouse(this.save, house[0], house[1], true, rot);
+    const sitehouse = nums("sitehouse");
+    if (sitehouse?.length === 2) placeHouse(this.save, sitehouse[0], sitehouse[1], false, rot);
+    if (q.get("housemenu")) this.houseSel = this.save.houses[0] ?? null;
+    if (q.get("depotlevel") && this.save.depots[0]) this.save.depots[0].level = Number(q.get("depotlevel"));
+    if (q.get("depotfull") && this.save.depots[0]) this.save.depots[0].planks = depotCapacity(this.save.depots[0]);
+    if (q.get("berries") && this.save.depots[0]) this.save.depots[0].berries = Number(q.get("berries"));
+    if (q.get("quarantine") && this.save.houses[0]) this.save.houses[0].quarantine = true;
+    if (q.get("xp") && this.save.workers[0]) this.save.workers[0].xp = Number(q.get("xp"));
+    if (q.get("protect") && this.save.workers[0]) this.save.workers[0].protect = Number(q.get("protect"));
+    if (q.get("age") && this.save.workers[0]) this.save.workers[0].age = Number(q.get("age"));
+    if (q.get("coins")) this.save.coins = Number(q.get("coins")); // ?coins=n : fixe les pièces
+    if (q.get("thirst") && this.save.workers[0]) this.save.workers[0].thirst = Number(q.get("thirst"));
+    if (q.get("hunger") && this.save.workers[0]) this.save.workers[0].hunger = Number(q.get("hunger"));
+    if (q.get("housewater") && this.save.houses[0]) this.save.houses[0].water = Number(q.get("housewater"));
+    if (q.get("housefood") && this.save.houses[0]) this.save.houses[0].food = Number(q.get("housefood"));
+    // ?inside=1 : tous les villageois sont dans la première maison ; ?dismantle=1 : on la démonte
+    const home = this.save.houses[0];
+    if (home && q.get("inside")) for (const w of this.workers) Object.assign(w.data, { home: home.id, inside: true, x: houseEntrance(home).gx + 0.5, y: houseEntrance(home).gy + 0.5 });
+    if (q.get("dismantle")) {
+      const b = this.save.houses[0] ?? this.save.camps[0] ?? this.save.depots[0];
+      if (b) this.dismantle(b);
+    }
+    const sitecamp = nums("sitecamp");
+    if (sitecamp?.length === 2) placeCamp(this.save, sitecamp[0], sitecamp[1], false, rot);
+    const sitedepot = nums("sitedepot");
+    if (sitedepot?.length === 2) placeDepot(this.save, sitedepot[0], sitedepot[1], false, rot);
+    if (q.get("sitewood") && this.save.sites[0]) this.save.sites[0].have = Math.min(this.save.sites[0].need, Number(q.get("sitewood")));
+    if (q.get("siteprogress") && this.save.sites[0]) this.save.sites[0].progress = Number(q.get("siteprogress"));
+    if (q.get("sitemenu")) this.siteSel = this.save.sites[0] ?? null;
+    // ?road=x0,y0,x1,y1 : un chemin horizontal puis vertical
+    const road = nums("road");
+    if (road?.length === 4) {
+      const [x0, y0, x1, y1] = road;
+      for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++) placeRoad(this.save, x, y0);
+      for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) placeRoad(this.save, x1, y);
+    }
+    if (q.get("campwood") && this.save.camps[0]) this.save.camps[0].wood = Number(q.get("campwood"));
+    if (q.get("stock") && this.save.depots[0]) this.save.depots[0].wood = Number(q.get("stock"));
+    if (q.get("depotplanks") && this.save.depots[0]) this.save.depots[0].planks = Number(q.get("depotplanks"));
+    if (q.get("depotcuts") && this.save.depots[0]) this.save.depots[0].cuts = Number(q.get("depotcuts"));
+    if (q.get("campmenu")) this.campSel = this.save.camps[0] ?? null;
+    if (q.get("depotmenu")) this.depotSel = this.save.depots[0] ?? null;
+    if (q.get("build")) {
+      this.build.open = true;
+      this.build.selected = q.get("build");
+      this.mouse = { x: this.w / 2, y: this.h / 2, inside: true };
+    }
+    const sel = this.selected;
+    if (sel) {
+      if (q.get("role") === "wood") sel.setRole("wood", this.env);
+      const goto = nums("goto");
+      if (goto?.length === 2) {
+        const path = findPath(this.save, sel.cell, { gx: goto[0], gy: goto[1] }, false, this.avoidFor(sel));
+        if (path) {
+          sel.moveTo(path, this.env);
+          this.follow = true;
+        }
+      }
+      const assign = nums("assign");
+      if (assign && assign.length >= 2) sel.startWood({ kind: "circle", cx: assign[0], cy: assign[1], r: assign[2] || WOOD_RADIUS }, this.env);
+      const wood = nums("wood");
+      if (wood?.length === 2) sel.startWood({ kind: "circle", cx: wood[0], cy: wood[1], r: WOOD_RADIUS }, this.env);
+      // essais : ?haul / ?haulany (porteur au premier dépôt ou port), ?haulsaw (scieur), ?haulbutcher (boucher), ?bee, ?hunt, ?lumber, ?builder
+      if ((q.get("haul") || q.get("haulany")) && (this.save.depots[0] || this.save.ports[0])) this.hire(sel, this.save.depots[0] ? "depot" : "port", (this.save.depots[0] ?? this.save.ports[0]).id);
+      if (q.get("haulsaw") && this.save.sawmills[0]) this.hire(sel, "sawmill", this.save.sawmills[0].id);
+      if (q.get("bury") && this.save.churches[0]) this.hire(sel, "church", this.save.churches[0].id);
+      if (q.get("heal") && this.save.clinics[0]) this.hire(sel, "clinic", this.save.clinics[0].id);
+      if (q.get("bee") && this.save.apiaries[0]) this.hire(sel, "apiary", this.save.apiaries[0].id);
+      if (q.get("haulbutcher") && this.save.butchers[0]) this.hire(sel, "butcher", this.save.butchers[0].id);
+      if (q.get("gather") && this.save.depots[0]) this.hire(sel, "gather", this.save.depots[0].id);
+      if (q.get("hunt") && this.save.lodges[0]) this.hire(sel, "lodge", this.save.lodges[0].id);
+      if (q.get("lumber") && this.save.camps[0]) this.hire(sel, "camp", this.save.camps[0].id);
+      if (q.get("foodjob") && this.save.houses[0]) sel.startWater(this.save.houses[0].id, this.env, true);
+      if (q.get("waterjob") && this.save.houses[0]) sel.startWater(this.save.houses[0].id, this.env);
+      if (q.get("builder") && this.save.sites[0]) this.hire(sel, "site", this.save.sites[0].id);
+    }
+    const drag = nums("drag");
+    if (drag?.length === 4) this.zoneDrag = { x0: drag[0] * C, y0: drag[1] * C, x1: drag[2] * C, y1: drag[3] * C, sx: 0, sy: 0 };
+  }
+
+  // ---------- caméra ----------
+
+  private resize(fit = false) {
+    this.dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.w = this.canvas.clientWidth;
+    this.h = this.canvas.clientHeight;
+    this.canvas.width = Math.round(this.w * this.dpr);
+    this.canvas.height = Math.round(this.h * this.dpr);
+    if (fit && !this.userCam) this.cam.zoom = Math.max(this.minZoom(), Math.min(this.w, this.h) / (15 * C));
+  }
+
+  private minZoom() {
+    return Math.min(this.w, this.h) / (GRID * C * 1.04);
+  }
+
+  // La caméra reste au-dessus de l'île.
+  private clampCam() {
+    this.cam.x = Math.min(GRID * C, Math.max(0, this.cam.x));
+    this.cam.y = Math.min(GRID * C, Math.max(0, this.cam.y));
+  }
+
+  private toWorld(clientX: number, clientY: number) {
+    const r = this.canvas.getBoundingClientRect();
+    return {
+      x: (clientX - r.left - this.w / 2) / this.cam.zoom + this.cam.x,
+      y: (clientY - r.top - this.h / 2) / this.cam.zoom + this.cam.y,
+    };
+  }
+
+  private toClient(wx: number, wy: number) {
+    const r = this.canvas.getBoundingClientRect();
+    return { x: r.left + (wx - this.cam.x) * this.cam.zoom + this.w / 2, y: r.top + (wy - this.cam.y) * this.cam.zoom + this.h / 2 };
+  }
+
+  private cellOf(wx: number, wy: number): Pos | null {
+    const gx = Math.floor(wx / C);
+    const gy = Math.floor(wy / C);
+    return gx < 0 || gy < 0 || gx >= GRID || gy >= GRID ? null : { gx, gy };
+  }
+
+  // ---------- saisie ----------
+
+  private bindInput() {
+    const cv = this.canvas;
+    cv.addEventListener("contextmenu", (e) => e.preventDefault());
+    cv.addEventListener("pointerdown", (e) => {
+      cv.setPointerCapture(e.pointerId);
+      // construction d'un chemin (ou démolition de chemins) : on glisse pour en tracer plusieurs cases d'un coup
+      if (e.button === 0 && this.build.open && (this.build.selected === "road" || this.build.selected === ERASE)) {
+        const w = this.toWorld(e.clientX, e.clientY);
+        const c = this.cellOf(w.x, w.y);
+        if (c) {
+          this.roadPaint = { mode: this.build.selected === "road" ? "road" : "erase", last: c };
+          if (this.roadPaint.mode === "erase") this.buildTap(w.x, w.y, e.clientX, e.clientY);
+          else this.paintRoad(c, e.clientX, e.clientY, true);
+        }
+        return;
+      }
+      // clic droit pendant qu'on choisit où poser un bâtiment : il tourne d'un quart de tour
+      if (e.button === 2 && this.build.open && this.build.selected && this.build.selected !== ERASE && this.build.selected !== "road") {
+        this.rotate();
+        return;
+      }
+      // clic droit maintenu avec un personnage sélectionné : on trace sa zone de travail
+      if (e.button === 2 && !this.build.open && this.selected) {
+        const w = this.toWorld(e.clientX, e.clientY);
+        this.zoneDrag = { x0: w.x, y0: w.y, x1: w.x, y1: w.y, sx: e.clientX, sy: e.clientY };
+        return;
+      }
+      this.press = { sx: e.clientX, sy: e.clientY, camX: this.cam.x, camY: this.cam.y, moved: false, button: e.button };
+    });
+    cv.addEventListener("pointermove", (e) => {
+      this.mouse = { x: e.clientX, y: e.clientY, inside: true };
+      if (this.roadPaint) {
+        const w = this.toWorld(e.clientX, e.clientY);
+        const c = this.cellOf(w.x, w.y);
+        if (c && (c.gx !== this.roadPaint.last.gx || c.gy !== this.roadPaint.last.gy)) {
+          for (const cell of cellsBetween(this.roadPaint.last, c)) {
+            if (this.roadPaint.mode === "road") this.paintRoad(cell, e.clientX, e.clientY, false);
+            else if (removeRoad(this.save, cell.gx, cell.gy)) this.roadsChanged = true;
+          }
+          this.roadPaint.last = c;
+        }
+        return;
+      }
+      if (this.zoneDrag) {
+        const w = this.toWorld(e.clientX, e.clientY);
+        this.zoneDrag.x1 = w.x;
+        this.zoneDrag.y1 = w.y;
+        return;
+      }
+      const p = this.press;
+      if (!p) return;
+      if (Math.hypot(e.clientX - p.sx, e.clientY - p.sy) > 6) p.moved = true;
+      if (p.moved) {
+        this.cam.x = p.camX - (e.clientX - p.sx) / this.cam.zoom;
+        this.cam.y = p.camY - (e.clientY - p.sy) / this.cam.zoom;
+        this.clampCam();
+      }
+    });
+    cv.addEventListener("pointerleave", () => (this.mouse.inside = false));
+    cv.addEventListener("pointerup", (e) => {
+      if (this.roadPaint) {
+        this.roadPaint = null;
+        if (this.roadsChanged) persist(this.save);
+        this.roadsChanged = false;
+        return;
+      }
+      const zd = this.zoneDrag;
+      if (zd && e.button === 2) {
+        this.zoneDrag = null;
+        const end = this.toWorld(e.clientX, e.clientY);
+        const dragged = Math.hypot(e.clientX - zd.sx, e.clientY - zd.sy) > 10;
+        // glisser : une zone de travail ; clic droit bref : le personnage sélectionné va là
+        if (dragged) this.assignZone({ kind: "rect", x0: zd.x0 / C, y0: zd.y0 / C, x1: end.x / C, y1: end.y / C }, e.clientX, e.clientY);
+        else this.rightClick(end.x, end.y, e.clientX, e.clientY);
+        return;
+      }
+      const p = this.press;
+      this.press = null;
+      if (!p || p.moved || p.button !== 0) return;
+      const w = this.toWorld(e.clientX, e.clientY);
+      if (this.build.open && !this.build.selected) this.build.open = false; // le menu est ouvert sans rien de choisi : un clic sur la carte le ferme
+      else if (this.build.open) this.buildTap(w.x, w.y, e.clientX, e.clientY);
+      else this.farmTap(w.x, w.y, e.clientX, e.clientY);
+    });
+    cv.addEventListener(
+      "wheel",
+      (e) => {
+        e.preventDefault();
+        const before = this.toWorld(e.clientX, e.clientY);
+        this.cam.zoom = Math.min(2.5, Math.max(this.minZoom(), this.cam.zoom * (e.deltaY > 0 ? 0.9 : 1.1)));
+        const after = this.toWorld(e.clientX, e.clientY);
+        this.cam.x += before.x - after.x;
+        this.cam.y += before.y - after.y;
+        this.clampCam();
+      },
+      { passive: false },
+    );
+
+    document.getElementById("rotate")?.addEventListener("click", () => this.rotate());
+    document.getElementById("popPill")?.addEventListener("click", () => this.openFolk());
+    document.getElementById("folkClose")?.addEventListener("click", () => this.closeFolk());
+    document.getElementById("folkModal")?.addEventListener("click", (e) => {
+      if (e.target === e.currentTarget) this.closeFolk(); // un clic à côté du tableau le ferme
+    });
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && this.paused) {
+        this.closeFolk();
+        this.closeMenu();
+      }
+    });
+    if (new URLSearchParams(location.search).has("folk")) setTimeout(() => this.openFolk(), 400); // essai
+    window.addEventListener("keydown", (e) => {
+      if (e.key.toLowerCase() === "r" && !e.ctrlKey && !e.metaKey) this.rotate();
+      if (e.key.toLowerCase() !== "escape") return;
+      if (this.paused) return; // le tableau ou le menu gèrent leur propre Échap
+      if (this.zoneDrag) this.zoneDrag = null;
+      else if (this.build.open || this.build.selected) {
+        this.build.open = false;
+        this.build.selected = null;
+      } else if (this.selected || this.campSel || this.depotSel || this.houseSel || this.sawmillSel || this.wellSel || this.lodgeSel || this.butcherSel || this.portSel || this.apiarySel || this.clinicSel || this.churchSel || this.siteSel) this.deselectAll();
+      else this.openMenu(); // rien à annuler : Échap ouvre le menu
+    });
+    // un clic en dehors du menu de construction (sans rien de choisi) le ferme
+    document.addEventListener("click", (e) => {
+      if (!this.build.open || this.build.selected) return;
+      const t = e.target as HTMLElement;
+      if (t.id === "game" || t.closest("#build, #buildBtn, #menuModal, #folkModal, #campMenu, #toast")) return;
+      this.build.open = false;
+    });
+    window.ferme?.onUpdate((u) => {
+      this.update = u;
+      if (u.state === "downloading" && u.percent === 0) toast(`⬇ Une mise à jour (${u.version}) se télécharge…`);
+      if (u.state === "ready") toast(`✅ La mise à jour ${u.version} est prête : « Installer » dans le menu, ou à la fermeture du jeu.`);
+      if (!(document.getElementById("menuModal") as HTMLElement).hidden) this.renderMenu();
+    });
+    document.getElementById("menuBtn")?.addEventListener("click", () => this.openMenu());
+    document.getElementById("menuClose")?.addEventListener("click", () => this.closeMenu());
+    document.getElementById("menuModal")?.addEventListener("click", (e) => {
+      if (e.target === e.currentTarget) this.closeMenu();
+    });
+    document.getElementById("importFile")?.addEventListener("change", (e) => {
+      const input = e.target as HTMLInputElement;
+      const file = input.files?.[0];
+      if (!file) return;
+      file.text().then((txt) => {
+        try {
+          const o = JSON.parse(txt);
+          if (!o || !Array.isArray(o.workers)) throw new Error("fichier invalide");
+          localStorage.setItem(SAVE_KEY, txt);
+          location.reload();
+        } catch {
+          toast("Ce fichier n'est pas une sauvegarde valide.");
+        }
+      });
+      input.value = "";
+    });
+    if (new URLSearchParams(location.search).has("menu")) setTimeout(() => this.openMenu(), 400); // essai
+  }
+
+  // ---------- menu du jeu ----------
+
+  private openMenu() {
+    this.closeFolk();
+    this.paused = true;
+    this.renderMenu();
+    (document.getElementById("menuModal") as HTMLElement).hidden = false;
+  }
+
+  private closeMenu() {
+    this.paused = false;
+    (document.getElementById("menuModal") as HTMLElement).hidden = true;
+  }
+
+  private renderMenu(helpOpen = false) {
+    const body = document.getElementById("menuBody") as HTMLElement;
+    const sub = document.getElementById("menuSub") as HTMLElement;
+    sub.textContent = `${this.workers.length} villageois`;
+    body.textContent = "";
+    const btn = (label: string, fn: () => void, cls = "") => {
+      const b = document.createElement("button");
+      b.className = `mBtn ${cls}`;
+      b.textContent = label;
+      b.addEventListener("click", fn);
+      return b;
+    };
+    const sep = () => body.appendChild(Object.assign(document.createElement("div"), { className: "mSep" }));
+    body.appendChild(btn("▶ Reprendre la partie", () => this.closeMenu()));
+    body.appendChild(
+      btn("💾 Sauvegarder maintenant", () => {
+        persist(this.save);
+        toast("Partie sauvegardée.");
+      }),
+    );
+    sep();
+    // son : activé / coupé et volume
+    const sound = document.createElement("div");
+    sound.className = "mRow";
+    const label = document.createElement("span");
+    label.textContent = isSoundOff() ? "🔇 Son" : "🔊 Son";
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = "0";
+    slider.max = "100";
+    slider.value = String(Math.round(getVolume() * 100));
+    slider.addEventListener("input", () => {
+      setVolume(Number(slider.value) / 100);
+      if (isSoundOff() && Number(slider.value) > 0) {
+        setSoundOff(false);
+        label.textContent = "🔊 Son";
+        mute.textContent = "Couper";
+      }
+    });
+    slider.addEventListener("change", () => play("bell")); // un coup de cloche pour juger le volume
+    const mute = btn(isSoundOff() ? "Activer" : "Couper", () => {
+      setSoundOff(!isSoundOff());
+      this.renderMenu(helpOpen);
+    });
+    mute.style.textAlign = "center";
+    sound.append(label, slider, mute);
+    body.appendChild(sound);
+    // vitesse du jeu
+    const speed = document.createElement("div");
+    speed.className = "mRow";
+    const sl = document.createElement("span");
+    sl.textContent = "⏩ Vitesse";
+    const seg = document.createElement("div");
+    seg.className = "mSeg";
+    for (const v of [1, 2, 4]) {
+      seg.appendChild(
+        btn(`×${v}`, () => {
+          this.timeScale = v;
+          this.renderMenu(helpOpen);
+        }, this.timeScale === v ? "on" : ""),
+      );
+    }
+    speed.append(sl, seg);
+    body.appendChild(speed);
+    body.appendChild(
+      btn(document.fullscreenElement ? "🗗 Quitter le plein écran" : "⛶ Plein écran", () => {
+        if (document.fullscreenElement) void document.exitFullscreen();
+        else void document.documentElement.requestFullscreen?.();
+        setTimeout(() => this.renderMenu(helpOpen), 250);
+      }),
+    );
+    sep();
+    // sauvegardes : fichier
+    body.appendChild(
+      btn("📤 Exporter la partie (fichier)", () => {
+        persist(this.save);
+        const raw = localStorage.getItem(SAVE_KEY);
+        if (!raw) return toast("Rien à exporter pour l'instant.");
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob([raw], { type: "application/json" }));
+        a.download = `ferme-sauvegarde-j${clockDay(this.save.clock)}.json`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+        toast("Sauvegarde exportée.");
+      }),
+    );
+    body.appendChild(btn("📥 Importer une partie", () => (document.getElementById("importFile") as HTMLInputElement).click()));
+    sep();
+    // aide
+    body.appendChild(btn(helpOpen ? "❓ Commandes ▴" : "❓ Commandes ▾", () => this.renderMenu(!helpOpen)));
+    if (helpOpen) {
+      const help = document.createElement("div");
+      help.className = "mHelp";
+      help.innerHTML =
+        "<b>Clic gauche</b> : sélectionner un villageois ou un bâtiment (son menu s'ouvre en haut à droite).<br>" +
+        "<b>Glisser</b> : déplacer la carte · <b>Molette</b> : zoom · <b>Minicarte</b> : aller quelque part.<br>" +
+        "<b>Clic droit</b> : envoyer le villageois sélectionné, ou l'embaucher dans un bâtiment.<br>" +
+        "<b>Clic droit maintenu</b> : tracer une zone de travail (bûcheron).<br>" +
+        "<b>🔨 Construire</b> : choisir un bâtiment ; <b>R</b> le tourne ; les chemins se tracent en glissant ; <b>🗑 Démolir</b> retire.<br>" +
+        "<b>👥</b> (en haut à gauche) : tableau des villageois, le jeu se met en pause.<br>" +
+        "<b>Échap</b> : annuler / ouvrir ce menu.";
+      body.appendChild(help);
+    }
+    sep();
+    // application de bureau : version, mises à jour, quitter
+    const app = window.ferme;
+    if (app) {
+      const u = this.update;
+      const status = !u || u.state === "none" || u.state === "dev" ? (u?.state === "dev" ? "Mises à jour désactivées (mode développement)" : "") : u.state === "checking" ? "Recherche d'une mise à jour…" : u.state === "downloading" ? `Téléchargement de la mise à jour ${u.version ?? ""} : ${u.percent ?? 0} %` : u.state === "error" ? `Mise à jour impossible : ${u.message ?? ""}` : "";
+      if (u?.state === "ready") body.appendChild(btn(`✅ Installer la mise à jour ${u.version} et redémarrer`, () => app.installUpdate(), "on"));
+      else body.appendChild(btn(u?.state === "none" ? "🔄 À jour · rechercher à nouveau" : "🔄 Rechercher une mise à jour", () => app.checkUpdate()));
+      if (status) body.appendChild(Object.assign(document.createElement("div"), { className: "mNote", textContent: status }));
+      body.appendChild(btn("⏏ Quitter le jeu", () => window.close()));
+      sep();
+    }
+    body.appendChild(
+      btn("🔄 Nouvelle partie", () => {
+        if (!confirm("Recommencer la ferme à zéro ? La partie actuelle sera perdue (pense à l'exporter).")) return;
+        persist(newSave());
+        location.reload();
+      }, "danger"),
+    );
+    body.appendChild(Object.assign(document.createElement("div"), { className: "mNote", textContent: `${window.ferme ? "Version " + window.ferme.version + " · " : ""}Sons : pack « Impact Sounds » de Kenney (CC0)` }));
+  }
+
+  // Clic ou glisser sur la minicarte : la caméra va à cet endroit.
+  private bindMinimap() {
+    const el = document.getElementById("minimap") as HTMLCanvasElement;
+    el.width = el.height = MINI;
+    const go = (e: PointerEvent) => {
+      const r = el.getBoundingClientRect();
+      this.cam.x = ((e.clientX - r.left) / r.width) * GRID * C;
+      this.cam.y = ((e.clientY - r.top) / r.height) * GRID * C;
+      this.clampCam();
+    };
+    el.addEventListener("pointerdown", (e) => {
+      el.setPointerCapture(e.pointerId);
+      go(e);
+    });
+    el.addEventListener("pointermove", (e) => {
+      if (e.buttons) go(e);
+    });
+  }
+
+  // ---------- actions du joueur ----------
+
+  // Clic gauche (hors construction) : on sélectionne UN personnage, un camp ou un dépôt ; un clic ailleurs désélectionne tout.
+  private farmTap(wx: number, wy: number, cx: number, cy: number) {
+    const hit = this.workerAt(wx, wy);
+    if (hit) {
+      this.selectWorker(hit);
+      return;
+    }
+    const cc = this.cellOf(wx, wy);
+    const camp = cc ? campAt(this.save, cc.gx, cc.gy) : null;
+    if (camp) {
+      this.deselectAll();
+      this.campSel = camp;
+      return;
+    }
+    const depot = cc ? depotAt(this.save, cc.gx, cc.gy) : null;
+    if (depot) {
+      this.deselectAll();
+      this.depotSel = depot;
+      return;
+    }
+    const minster = cc ? churchAt(this.save, cc.gx, cc.gy) : null;
+    if (minster) {
+      this.deselectAll();
+      this.churchSel = minster;
+      return;
+    }
+    const infirm = cc ? clinicAt(this.save, cc.gx, cc.gy) : null;
+    if (infirm) {
+      this.deselectAll();
+      this.clinicSel = infirm;
+      return;
+    }
+    const hive = cc ? apiaryAt(this.save, cc.gx, cc.gy) : null;
+    if (hive) {
+      this.deselectAll();
+      this.apiarySel = hive;
+      return;
+    }
+    const dock = cc ? portAt(this.save, cc.gx, cc.gy) : null;
+    if (dock) {
+      this.deselectAll();
+      this.portSel = dock;
+      return;
+    }
+    const shop = cc ? butcherAt(this.save, cc.gx, cc.gy) : null;
+    if (shop) {
+      this.deselectAll();
+      this.butcherSel = shop;
+      return;
+    }
+    const hut = cc ? lodgeAt(this.save, cc.gx, cc.gy) : null;
+    if (hut) {
+      this.deselectAll();
+      this.lodgeSel = hut;
+      return;
+    }
+    const pit = cc ? wellAt(this.save, cc.gx, cc.gy) : null;
+    if (pit) {
+      this.deselectAll();
+      this.wellSel = pit;
+      return;
+    }
+    const sawmill = cc ? sawmillAt(this.save, cc.gx, cc.gy) : null;
+    if (sawmill) {
+      this.deselectAll();
+      this.sawmillSel = sawmill;
+      return;
+    }
+    const house = cc ? houseAt(this.save, cc.gx, cc.gy) : null;
+    if (house) {
+      this.deselectAll();
+      this.houseSel = house;
+      return;
+    }
+    const site = cc ? siteAt(this.save, cc.gx, cc.gy) : null;
+    if (site && !site.undo) {
+      this.deselectAll();
+      this.siteSel = site;
+      return;
+    }
+    this.deselectAll();
+    if (this.tool === "walk") return;
+
+    // avec une graine en main, le clic agit sur le terrain : arbre, eau ou champ
+    const now = Date.now();
+    const tree = this.terrain.treeAt(wx, wy, (idx) => isFelled(this.save, idx, now));
+    if (tree >= 0) {
+      if (storageFree(this.save) <= 0) {
+        this.floatText(cx, cy, storageCapacity(this.save) > 0 ? "Dépôts pleins" : "Construis un dépôt pour stocker le bois");
+        return;
+      }
+      const wood = chopTree(this.save, tree, now);
+      persist(this.save);
+      this.floatText(cx, cy, `+${wood} 🪵 en stock`);
+      return;
+    }
+    if (!cc) return;
+    if (isWater(terrainAt(cc.gx, cc.gy))) {
+      if (now - this.lastFish < FISH_COOLDOWN_MS) {
+        this.floatText(cx, cy, "La ligne se remet à l'eau…");
+        return;
+      }
+      this.lastFish = now;
+      this.splashes.push({ x: wx, y: wy, t0: performance.now() });
+      const n = catchFish(this.save, terrainAt(cc.gx, cc.gy) === 0);
+      persist(this.save);
+      this.floatText(cx, cy, n ? `+${n} 🐟` : "Rien ne mord…");
+      return;
+    }
+    const i = cc.gy * GRID + cc.gx;
+    const before = this.save.cells[i];
+    const a = interact(this.save, i, now, this.crop);
+    persist(this.save);
+    let msg = ACTION_MESSAGES[a];
+    if (a === "plant") msg = `-${CROP_BY_ID[this.crop].cost} pièces`;
+    if (a === "harvest" && before.kind === "crop") msg = `+${CROP_BY_ID[before.crop]?.gain ?? 0} pièces`;
+    this.floatText(cx, cy, msg);
+  }
+
+  private selectWorker(w: Worker) {
+    this.deselectAll();
+    this.selected = w;
+    this.jobMenuOpen = false;
+  }
+
+  private deselectAll() {
+    this.selected = null;
+    this.campSel = null;
+    this.depotSel = null;
+    this.siteSel = null;
+    this.houseSel = null;
+    this.sawmillSel = null;
+    this.wellSel = null;
+    this.lodgeSel = null;
+    this.butcherSel = null;
+    this.portSel = null;
+    this.apiarySel = null;
+    this.clinicSel = null;
+    this.churchSel = null;
+  }
+
+  private workerAt(wx: number, wy: number): Worker | null {
+    let best: Worker | null = null;
+    let bestD = 0.5;
+    for (const w of this.workers) {
+      if (w.inside) continue;
+      const d = Math.hypot(w.x * C - wx, w.y * C - wy) / C;
+      if (d < bestD) {
+        bestD = d;
+        best = w;
+      }
+    }
+    return best;
+  }
+
+  // Clic droit : sur un dépôt, le villageois sélectionné devient son porteur ; ailleurs, il va là.
+  private rightClick(wx: number, wy: number, cx: number, cy: number) {
+    const w = this.selected;
+    if (!w) return;
+    const cell = this.cellOf(wx, wy);
+    if (!cell) return;
+    // clic droit sur un bâtiment qui emploie : le villageois sélectionné y est embauché (s'il reste un poste)
+    const spot = (): [WorkplaceKind, number] | null => {
+      const depot = depotAt(this.save, cell.gx, cell.gy);
+      if (depot) return ["depot", depot.id];
+      const minster = churchAt(this.save, cell.gx, cell.gy);
+      if (minster) return ["church", minster.id];
+      const infirm = clinicAt(this.save, cell.gx, cell.gy);
+      if (infirm) return ["clinic", infirm.id];
+      const hive = apiaryAt(this.save, cell.gx, cell.gy);
+      if (hive) return ["apiary", hive.id];
+      const shop = butcherAt(this.save, cell.gx, cell.gy);
+      if (shop) return ["butcher", shop.id];
+      const hut = lodgeAt(this.save, cell.gx, cell.gy);
+      if (hut) return ["lodge", hut.id];
+      const mill = sawmillAt(this.save, cell.gx, cell.gy);
+      if (mill) return ["sawmill", mill.id];
+      const dock = portAt(this.save, cell.gx, cell.gy);
+      if (dock) return ["port", dock.id];
+      const camp = campAt(this.save, cell.gx, cell.gy);
+      if (camp) return ["camp", camp.id];
+      const site = siteAt(this.save, cell.gx, cell.gy);
+      if (site && !site.undo) return ["site", site.id];
+      return null;
+    };
+    const job = spot();
+    if (job) {
+      this.hire(w, job[0], job[1]);
+      return;
+    }
+    w.leave(this.env);
+    const path = findPath(this.save, w.cell, cell, false, this.avoidFor(w));
+    if (!path) {
+      this.floatText(cx, cy, "Impossible d'y aller");
+      return;
+    }
+    w.moveTo(path, this.env);
+    this.follow = true;
+  }
+
+  // Porteur universel : il transporte tout, d'un bâtiment à l'autre, en choisissant lui-même le prochain voyage utile
+  // (bûches des camps → scierie, viande des chasseurs → boucherie, planches et viande préparée → dépôt, dépôts → port pour l'export).
+  private anyHaulTask(from: Pos, cargo?: string): { dest: HaulDest; id: number } | null {
+    const s = this.save;
+    const cands: { dest: HaulDest; id: number; e: Pos }[] = [
+      ...s.sawmills.map((m) => ({ dest: "sawmill" as const, id: m.id, e: sawmillEntrance(m) })),
+      ...s.butchers.map((m) => ({ dest: "butcher" as const, id: m.id, e: butcherEntrance(m) })),
+      ...s.depots.map((m) => ({ dest: "depot" as const, id: m.id, e: depotEntrance(m) })),
+      ...s.ports.map((m) => ({ dest: "port" as const, id: m.id, e: portEntrance(m) })),
+    ];
+    // déjà chargé : seules les destinations qui conviennent à sa cargaison
+    const wanted: Record<string, HaulDest[]> = { wood: ["sawmill"], meat: ["butcher"], plank: ["depot", "port"], cuts: ["depot", "port"], honey: ["port"], berries: ["port"] };
+    const ok = cands
+      .filter((c) => !cargo || !wanted[cargo] || wanted[cargo].includes(c.dest))
+      .filter((c) => {
+        if (c.dest !== "port" || !cargo) return true;
+        const p = s.ports.find((m) => m.id === c.id);
+        return !!p && portAccepts(p, cargo === "plank" ? "plank" : cargo === "honey" ? "honey" : cargo === "berries" ? "berries" : "cuts");
+      })
+      .filter((c) => this.haulRoute(c.id, !cargo, c.dest).ok)
+      .sort((a, b) => Math.hypot(a.e.gx - from.gx, a.e.gy - from.gy) - Math.hypot(b.e.gx - from.gx, b.e.gy - from.gy));
+    return ok.length ? { dest: ok[0].dest, id: ok[0].id } : null;
+  }
+
+  // Le soigneur choisit sa prochaine étape : porter un remède à un malade, ranger ce qu'il porte, préparer un remède, aller chercher des ingrédients.
+  private healPlan(clinicId: number, _from: Pos, w: Worker): HealPlan | null {
+    const s = this.save;
+    const c = s.clinics.find((k) => k.id === clinicId);
+    if (!c) return null;
+    const door = clinicEntrance(c);
+    const hid = w.data.id;
+    const cargo = w.data.carry > 0 ? w.data.cargo : undefined;
+    const taken = new Set([...this.healClaims].filter(([k]) => k !== hid).map(([, v]) => v));
+    // les malades qui n'ont pas été soignés récemment, les plus graves d'abord
+    const patients = this.workers
+      .filter((o) => o.data.illness && !taken.has(o.data.id) && (o.data.illness.slowUntil ?? 0) <= o.data.illness.age) // le soigneur malade peut se soigner lui-même
+      .sort((a, b) => (b === w ? 1000 : 0) + b.data.illness!.sev - ((a === w ? 1000 : 0) + a.data.illness!.sev)); // et se soigne en premier
+    const where = (o: Worker): Pos => {
+      const home = s.houses.find((h) => h.id === o.data.home);
+      return o.inside && home ? houseEntrance(home) : o.cell;
+    };
+    // la prévention : une tisane à un villageois bien portant mais exposé (hiver, épidémie, maison d'un malade, soif, faim, fatigue)
+    const winter = this.season().rules.id === "winter";
+    const flu = this.workers.some((o) => o.data.illness?.kind === "flu");
+    const preventTarget = (): Worker | undefined => {
+      if (c.prevent === false) return undefined;
+      const sickHomes = new Set(this.workers.filter((o) => o.data.illness).map((o) => o.data.home));
+      const exposed = (o: Worker) => (sickHomes.has(o.data.home) && o.data.home != null ? 3 : 0) + (flu ? 2 : 0) + (winter ? 1 : 0) + ((o.data.thirst ?? 0) >= 70 || (o.data.hunger ?? 0) >= 70 || o.energy < 30 ? 1 : 0);
+      return this.workers
+        .filter((o) => o !== w && !o.data.illness && !taken.has(o.data.id) && (o.data.protect ?? 0) <= 30 && exposed(o) > 0)
+        .sort((a, b) => exposed(b) - exposed(a))[0];
+    };
+    if (cargo === "tisane" || cargo === "syrup") {
+      const p = patients[0];
+      if (p) {
+        this.healClaims.set(hid, p.data.id);
+        return { type: "treat", target: where(p), patientId: p.data.id };
+      }
+      const t = cargo === "tisane" ? preventTarget() : undefined;
+      if (t) {
+        this.healClaims.set(hid, t.data.id);
+        return { type: "treat", target: where(t), patientId: t.data.id, prevent: true };
+      }
+      this.healClaims.delete(hid);
+      return { type: "stock", target: door }; // plus personne à soigner ni à protéger : le remède retourne au stock
+    }
+    if (cargo === "berries" || cargo === "honey") return { type: "stock", target: door };
+    const p = patients.find((o) => bestRemedy(c, o.data.illness!));
+    if (p) {
+      this.healClaims.set(hid, p.data.id);
+      return { type: "grab", target: door, patientId: p.data.id };
+    }
+    this.healClaims.delete(hid);
+    if (c.tisane > PREVENT_RESERVE) {
+      const t = preventTarget();
+      if (t) {
+        this.healClaims.set(hid, t.data.id);
+        return { type: "grab", target: door, patientId: t.data.id, prevent: true };
+      }
+    }
+    if (brewable(c)) return { type: "brew", target: door };
+    // des ingrédients à rapporter des dépôts, tant qu'il reste de la place pour des remèdes
+    if (c.tisane < CLINIC_REMEDY_CAP || c.syrup < CLINIC_REMEDY_CAP) {
+      const depots = [...s.depots].sort((a, b) => Math.hypot(depotEntrance(a).gx - door.gx, depotEntrance(a).gy - door.gy) - Math.hypot(depotEntrance(b).gx - door.gx, depotEntrance(b).gy - door.gy));
+      const wantHoney = c.honey < 3 && c.syrup < CLINIC_REMEDY_CAP;
+      const withHoney = wantHoney ? depots.find((d) => (d.honey ?? 0) > 0) : undefined;
+      if (withHoney) return { type: "fetch", target: depotEntrance(withHoney), depotId: withHoney.id, good: "honey" };
+      if (c.berries < CLINIC_BERRY_CAP - 4) {
+        const withBerries = depots.find((d) => (d.berries ?? 0) > 0);
+        if (withBerries) return { type: "fetch", target: depotEntrance(withBerries), depotId: withBerries.id, good: "berries" };
+      }
+    }
+    return null;
+  }
+
+  // Le fossoyeur choisit sa prochaine étape : porter son défunt à l'église, ou aller chercher le défunt le plus proche.
+  private buryPlan(churchId: number, from: Pos, w: Worker): BuryPlan | null {
+    const s = this.save;
+    const c = s.churches.find((k) => k.id === churchId);
+    if (!c) return null;
+    if (w.data.carry > 0 && w.data.cargo === "body") return { type: "inter", target: churchEntrance(c) };
+    if (gravesFree(c) <= 0) return null; // cimetière plein
+    const taken = new Set([...this.buryClaims].filter(([k]) => k !== w.data.id).map(([, v]) => v));
+    const body = s.corpses
+      .filter((x) => !taken.has(x.id))
+      .sort((a, b) => Math.hypot(a.x - from.gx, a.y - from.gy) - Math.hypot(b.x - from.gx, b.y - from.gy))[0];
+    if (!body) {
+      this.buryClaims.delete(w.data.id);
+      return null;
+    }
+    this.buryClaims.set(w.data.id, body.id);
+    return { type: "pick", target: { gx: Math.floor(body.x), gy: Math.floor(body.y) }, corpseId: body.id };
+  }
+
+  // L'action du fossoyeur une fois arrivé.
+  private buryDo(plan: BuryPlan, w: Worker) {
+    const s = this.save;
+    const job = w.data.job;
+    if (!job || job.type !== "bury") return;
+    const c = s.churches.find((k) => k.id === job.churchId);
+    if (!c) return;
+    const pop = this.toClient(w.x * C, w.y * C);
+    if (plan.type === "pick") {
+      const i = s.corpses.findIndex((x) => x.id === plan.corpseId);
+      this.buryClaims.delete(w.data.id);
+      if (i < 0) return; // un autre l'a déjà pris
+      const [b] = s.corpses.splice(i, 1);
+      w.data.body = { name: b.name, age: b.age, cause: b.cause, color: b.color };
+      w.data.carry = 1;
+      w.data.cargo = "body";
+      this.floatText(pop.x, pop.y, "⚰️");
+    } else if (w.data.body) {
+      const b = w.data.body;
+      c.graves.push({ name: b.name, age: b.age, cause: b.cause, color: b.color });
+      w.data.body = undefined;
+      w.data.carry = 0;
+      w.data.cargo = undefined;
+      job.buried++;
+      this.floatText(pop.x, pop.y, "✝");
+      play("bell");
+      toast(`⛪ ${b.name} repose désormais au cimetière.`);
+    }
+    persist(s);
+  }
+
+  // Le soigneur gagne de l'expérience ; un changement de niveau est annoncé.
+  private gainXp(w: Worker, n: number) {
+    const before = healSkill(w.data.xp ?? 0).level;
+    w.data.xp = (w.data.xp ?? 0) + n;
+    const after = healSkill(w.data.xp);
+    if (after.level > before) toast(`🩺 ${w.name} devient ${after.label.toLowerCase()} : ses remèdes sont plus efficaces.`);
+  }
+
+  // L'action du soigneur une fois arrivé.
+  private healDo(plan: HealPlan, w: Worker) {
+    const s = this.save;
+    const job = w.data.job;
+    if (!job || job.type !== "heal") return;
+    const c = s.clinics.find((k) => k.id === job.clinicId);
+    if (!c) return;
+    const skill = healSkill(w.data.xp ?? 0);
+    const p = "patientId" in plan ? this.workers.find((o) => o.data.id === plan.patientId) : undefined;
+    const pop = this.toClient(w.x * C, w.y * C);
+    if (plan.type === "grab") {
+      const r: RemedyKind | null = plan.prevent ? (c.tisane > 0 ? "tisane" : null) : p?.data.illness ? bestRemedy(c, p.data.illness) : null;
+      if (!r) {
+        this.healClaims.delete(w.data.id);
+        return;
+      }
+      c[r]--;
+      w.data.carry = 1;
+      w.data.cargo = r;
+    } else if (plan.type === "treat") {
+      if (!p || (!p.data.illness && !plan.prevent)) {
+        this.healClaims.delete(w.data.id);
+        return; // guéri ou parti entre-temps : le remède retournera au stock
+      }
+      const near = p.inside || Math.hypot(p.cell.gx - plan.target.gx, p.cell.gy - plan.target.gy) <= 3;
+      if (!near) return; // il a bougé : le soigneur recalcule
+      const remedy = w.data.cargo as RemedyKind;
+      w.data.carry = 0;
+      w.data.cargo = undefined;
+      this.healClaims.delete(w.data.id);
+      if (p.data.illness) {
+        const kind = p.data.illness.kind;
+        const cured = applyRemedy(p.data, remedy, skill.power);
+        job.treated++;
+        this.gainXp(w, XP_TREAT + (cured ? XP_CURE : 0));
+        this.floatText(pop.x, pop.y, `${REMEDIES[remedy].emoji} ${p.name}`);
+        if (cured) this.onHealth({ type: "cured", worker: p.data, kind });
+      } else {
+        protectVillager(p.data);
+        this.gainXp(w, XP_PREVENT);
+        this.floatText(pop.x, pop.y, `🛡️ ${p.name}`);
+      }
+    } else if (plan.type === "brew") {
+      const k = brewable(c);
+      if (k) {
+        brew(c, k, skill.save);
+        this.gainXp(w, XP_BREW);
+        this.floatText(pop.x, pop.y, `+1 ${REMEDIES[k].emoji}`);
+      }
+    } else if (plan.type === "fetch") {
+      const d = s.depots.find((k) => k.id === plan.depotId);
+      if (d) {
+        const room = plan.good === "berries" ? CLINIC_BERRY_CAP - c.berries : CLINIC_HONEY_CAP - c.honey;
+        const have = plan.good === "berries" ? d.berries ?? 0 : d.honey ?? 0;
+        const n = Math.min(room, have, plan.good === "berries" ? 8 : 4);
+        if (plan.good === "berries") d.berries = have - n;
+        else d.honey = have - n;
+        w.data.carry = n;
+        w.data.cargo = plan.good;
+      }
+    } else if (plan.type === "stock") {
+      const cargo = w.data.cargo;
+      if (cargo === "berries" || cargo === "honey") addClinicStock(c, cargo, w.data.carry);
+      else if (cargo === "tisane" || cargo === "syrup") c[cargo]++;
+      w.data.carry = 0;
+      w.data.cargo = undefined;
+    }
+    persist(s);
+  }
+
+  // Une maladie qui se déclare, une guérison, un décès.
+  private onHealth(ev: HealthEvent) {
+    const d = ev.worker;
+    const e = FEMALE_NAMES.includes(d.name) ? "e" : "";
+    const il = ILLNESSES[ev.kind];
+    if (ev.type === "sick" && ev.from) toast(`${il.emoji} ${d.name} a été contaminé${e} par ${ev.from} : ${il.label.toLowerCase()}.`);
+    else if (ev.type === "sick") toast(ev.epidemic ? `🦠 Une épidémie de ${il.label.toLowerCase()} se déclare : ${d.name} est malade !` : `${il.emoji} ${d.name} est tombé${e} malade : ${il.label.toLowerCase()}.`);
+    else if (ev.type === "cured") toast(`💚 ${d.name} est guéri${e} !`);
+    else this.bury(d, `☠️ ${d.name} est mort${e} de ${il.label.toLowerCase()}. Un nouveau villageois arrivera peut-être plus tard.`, il.label.toLowerCase());
+    persist(this.save);
+  }
+
+  // Un villageois meurt : il disparaît, le joueur en perd un, un nouveau arrivera plus tard.
+  private bury(d: WorkerSave, message: string, cause: string) {
+    spawnCorpse(this.save, d, cause); // le corps reste devant la maison, en attendant un fossoyeur
+    const w = this.workers.find((o) => o.data === d);
+    if (w) {
+      w.stop(this.env);
+      if (this.selected === w) this.selected = null;
+      const p = this.toClient(w.x * C, w.y * C);
+      this.floatText(p.x, p.y, "🕯️");
+    }
+    this.save.workers = this.save.workers.filter((k) => k !== d);
+    this.workers = this.workers.filter((o) => o.data !== d);
+    this.healClaims.delete(d.id);
+    toast(this.save.churches.length ? message : `${message} Son corps reste devant sa maison : il faut une église (et un fossoyeur) pour l'enterrer.`);
+    this.arrivalT = this.arrivalSec - DEPARTURE_RETURN_SEC;
+  }
+
+  // Le temps passe : un ancien approche de la fin, ou s'éteint.
+  private onAge(ev: AgeEvent) {
+    const d = ev.worker;
+    const e = FEMALE_NAMES.includes(d.name) ? "e" : "";
+    if (ev.type === "warn") toast(`🧓 ${d.name} se fait vieux${e ? "ille" : ""} (${Math.floor(d.age ?? 0)} ans) : ${e ? "elle" : "il"} n'a plus beaucoup de temps devant ${e ? "elle" : "lui"}.`);
+    else {
+      this.bury(d, `🕯️ ${d.name} s'est éteint${e} de vieillesse à ${Math.floor(d.age ?? 0)} ans. Un nouveau villageois arrivera peut-être plus tard.`, "vieillesse");
+      persist(this.save);
+    }
+  }
+
+  // Un habitant va chercher de l'eau pour sa maison : au puits (relié par un chemin) le plus proche qui en a, jusqu'à ce que la maison soit pleine.
+  private sendForWater(house: House, food = false) {
+    // l'habitant qui part : de préférence un qui ne fait rien, et qui n'a rien sur le dos
+    const free = this.workers.filter((o) => o.data.home === house.id && (o.data.carry === 0 || o.data.cargo === "water") && !(o.data.job?.type === "water"));
+    const w = free.find((o) => !o.working) ?? free[0];
+    if (!w) {
+      toast("Personne ne peut y aller pour l'instant : les habitants portent déjà quelque chose.");
+      return;
+    }
+    const t = this.waterTarget(house.id, true, food);
+    if (!t.ok && t.reason !== "noWell") {
+      toast(
+        t.reason === "full"
+          ? food ? "Cette maison a déjà toute la nourriture qu'il lui faut." : "Cette maison a déjà toute l'eau qu'il lui faut."
+          : t.reason === "noRoad"
+            ? `Aucun chemin ne relie cette maison à ${food ? "une boucherie" : "un puits"} (🔨 Construire › Chemin).`
+            : "Il n'y a pas de maison.",
+      );
+      return;
+    }
+    if (!t.ok) {
+      const any = food ? this.save.butchers.length : this.save.wells.length;
+      toast(
+        any
+          ? food ? "Les boucheries et dépôts reliés à cette maison n'ont pas de viande préparée pour l'instant." : "Les puits reliés à cette maison sont à sec : attends qu'ils se remplissent."
+          : food ? "Il n'y a ni boucherie ni dépôt : construis-en une (🔨 Construire)." : "Il n'y a aucun puits : construis-en un (🔨 Construire).",
+      );
+      return;
+    }
+    w.startWater(house.id, this.env, food);
+    persist(this.save);
+    toast(food ? `${w.name} part chercher à manger à la boucherie pour sa maison.` : `${w.name} part chercher de l'eau au puits pour sa maison.`);
+  }
+
+  // Où une corvée d'eau envoie : le puits le plus proche de la maison qui est relié à elle par un chemin et qui a de l'eau (needWater).
+  private waterTarget(houseId: number, needWater: boolean, food = false): WaterRoute {
+    const s = this.save;
+    const house = s.houses.find((h) => h.id === houseId);
+    if (!house) return { ok: false, reason: "noHouse" };
+    if (food ? (house.food ?? 0) >= HOUSE_FOOD_CAP : (house.water ?? 0) >= HOUSE_WATER_CAP) return { ok: false, reason: "full" };
+    // sources : les puits (eau) ou les boucheries (viande préparée)
+    type WSrc = { id: number; gx: number; gy: number; e: Pos; stock: number; kind?: "butcher" | "depot" };
+    const sources: WSrc[] = food
+      ? [
+          ...s.butchers.map((m): WSrc => ({ id: m.id, gx: m.gx, gy: m.gy, e: butcherEntrance(m), stock: m.cuts, kind: "butcher" })),
+          ...s.depots.map((m): WSrc => ({ id: m.id, gx: m.gx, gy: m.gy, e: depotEntrance(m), stock: (m.cuts ?? 0) + (m.berries ?? 0), kind: "depot" })),
+        ]
+      : s.wells.map((m) => ({ id: m.id, gx: m.gx, gy: m.gy, e: wellEntrance(m), stock: m.water }));
+    if (!sources.length) return { ok: false, reason: "noWell" };
+    const he = houseEntrance(house);
+    const linked = sources.filter((m) => this.linkedTo(m.e, [he])).sort((a, b) => Math.hypot(a.gx - house.gx, a.gy - house.gy) - Math.hypot(b.gx - house.gx, b.gy - house.gy));
+    if (!linked.length) return { ok: false, reason: "noRoad" };
+    const src = needWater ? linked.find((m) => m.stock > 0) : linked[0];
+    if (!src) return { ok: false, reason: "noWell" };
+    return { ok: true, wellId: src.id, wellAccess: src.e, houseAccess: he, srcKind: src.kind };
+  }
+
+  // R / bouton Tourner : en construction, tourne l'aperçu ; sinon, tourne le bâtiment sélectionné d'un quart de tour.
+  private rotate() {
+    if (this.build.open) {
+      this.buildRot = (this.buildRot + 1) % 4;
+      return;
+    }
+    if (this.portSel) {
+      toast("Le port est toujours tourné vers la mer.");
+      return;
+    }
+    const target = this.butcherSel
+      ? { b: this.butcherSel, k: "butcher" as const }
+      : this.lodgeSel
+      ? { b: this.lodgeSel, k: "lodge" as const }
+      : this.wellSel
+      ? { b: this.wellSel, k: "well" as const }
+      : this.sawmillSel
+      ? { b: this.sawmillSel, k: "sawmill" as const }
+      : this.houseSel
+      ? { b: this.houseSel, k: "house" as const }
+      : this.campSel
+        ? { b: this.campSel, k: "camp" as const }
+        : this.depotSel
+          ? { b: this.depotSel, k: "depot" as const }
+          : this.siteSel
+            ? { b: this.siteSel, k: this.siteSel.kind }
+            : null;
+    if (!target) return;
+    if (rotateBuilding(this.save, target.b, target.k)) persist(this.save);
+    else toast("Impossible de tourner : il n'y a pas de place libre pour l'entrée.");
+  }
+
+  // Case libre la plus proche de la porte pour sortir de la maison : aucun autre personnage n'y est, ni n'y va.
+  private spawnSpot(self: Worker): Pos {
+    const house = this.save.houses.find((h) => h.id === self.data.home);
+    const door = house ? houseEntrance(house) : self.cell;
+    const busy = (c: Pos) => !this.crossable(c) && this.workers.some((o) => o !== self && !o.inside && (sameCell(o.cell, c) || (!!o.nextCell && sameCell(o.nextCell, c))));
+    for (let r = 0; r < 12; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const c = { gx: door.gx + dx, gy: door.gy + dy };
+          if (walkable(this.save, c.gx, c.gy) && !busy(c)) return c;
+        }
+      }
+    }
+    return door;
+  }
+
+  // Démonte le bâtiment : il devient un chantier qui se défait en quelques secondes, puis rend une partie de ses matériaux.
+  private dismantle(b: House | Camp | Depot | Sawmill | Well | Lodge | Butcher | Port | Apiary | Clinic | Church) {
+    // les habitants sortent un par un, chacun sur sa propre case
+    for (const w of this.workers) if (w.inside && w.data.home === (b as House).id && this.save.houses.includes(b as House)) w.leave(this.env);
+    startDismantle(this.save, b);
+    this.deselectAll();
+    persist(this.save);
+  }
+
+  // Annule un chantier : la moitié des pièces et le bois déjà livré sont rendus tout de suite.
+  private cancelSite(t: Site) {
+    const g = siteRefund(t);
+    const n = g.wood + g.planks;
+    removeSite(this.save, t);
+    this.deselectAll();
+    persist(this.save);
+    toast(n ? `Chantier annulé : ${n} ${g.planks ? "planche" : "🪵"}${g.planks && n > 1 ? "s" : ""} récupéré${n > 1 ? "s" : ""}.` : "Chantier annulé.");
+  }
+
+  // Un villageois qui est dans la maison en sort : il apparaît près de la porte, sur une case libre, et on le sélectionne.
+  private leaveHome(w: Worker, _house: House) {
+    w.leave(this.env);
+    persist(this.save);
+    this.selectWorker(w);
+  }
+
+  // Boutons du bas de menu : tourner et démonter.
+  // Pied du menu : deux gros boutons côte à côte, tourner et démonter (ou annuler le chantier).
+  private addMenuActions(box: HTMLElement, b: House | Camp | Depot | Sawmill | Well | Lodge | Butcher | Port | Apiary | Clinic | Church | Site) {
+    const row = document.createElement("div");
+    row.className = "menuActions";
+    const btn = (icon: string, label: string, sub: string, fn: () => void) => {
+      const el = document.createElement("button");
+      el.className = "round menuBtn";
+      const top = document.createElement("span");
+      top.textContent = `${icon} ${label}`;
+      el.appendChild(top);
+      if (sub) {
+        const small = document.createElement("small");
+        small.textContent = sub;
+        el.appendChild(small);
+      }
+      el.addEventListener("click", fn);
+      row.appendChild(el);
+    };
+    btn("↻", "Tourner", "", () => this.rotate());
+    if (this.save.houses.includes(b as House)) {
+      // quarantaine : les malades de la maison y restent, la contagion ne sort plus
+      const h = b as House;
+      const sick = this.workers.some((w) => w.data.home === h.id && w.data.illness);
+      if (sick || h.quarantine)
+        btn("🚧", h.quarantine ? "Lever la quarantaine" : "Quarantaine", h.quarantine ? "" : "les malades restent chez eux", () => {
+          h.quarantine = !h.quarantine;
+          toast(h.quarantine ? "Quarantaine : les malades de cette maison n'en sortent plus." : "Quarantaine levée.");
+          persist(this.save);
+          this.menuSig = "";
+        });
+    }
+    if (this.save.clinics.includes(b as Clinic)) {
+      const cl = b as Clinic;
+      btn("🛡️", "Prévention", cl.prevent === false ? "coupée" : "activée : tisanes aux villageois exposés", () => {
+        cl.prevent = cl.prevent === false ? true : false;
+        persist(this.save);
+        this.menuSig = "";
+      });
+    }
+    if ("wood" in b && "gx" in b && this.save.depots.includes(b as Depot)) {
+      const d = b as Depot;
+      const lv = depotLevel(d);
+      if (lv < DEPOT_LEVELS.length) {
+        const next = DEPOT_LEVELS[lv];
+        btn("⬆️", "Améliorer", `${next.coins} 🪙 ${next.planks} 🪚 · ${next.cap} places`, () => {
+          const r = upgradeDepot(this.save, d);
+          if (r === "ok") {
+            toast(`Dépôt amélioré : ${depotCapacity(d)} places.`);
+            persist(this.save);
+          } else toast(r === "poor" ? "Pas assez de pièces pour améliorer le dépôt." : "Pas assez de planches en stock pour améliorer le dépôt.");
+          this.menuSig = "";
+        });
+      }
+    }
+    const s = this.save;
+    const g = "kind" in b ? siteRefund(b) : dismantleGain(s, b);
+    const gain = [g.coins ? `${g.coins} 🪙` : "", g.wood ? `${g.wood} 🪵` : "", g.planks ? `${g.planks} 🪚` : ""].filter(Boolean).join(" ");
+    btn("🧰", "kind" in b ? "Annuler" : "Démonter", gain ? `+ ${gain}` : "", () => ("kind" in b ? this.cancelSite(b) : this.dismantle(b)));
+    box.appendChild(row);
+  }
+
+  // Itinéraire d'un bâtisseur : de l'entrée d'un camp ou d'un dépôt (qui a du bois si wantWood) jusqu'à l'entrée du chantier, par les chemins.
+  private buildRoute(siteId: number, wantMat: boolean): BuildRoute {
+    const s = this.save;
+    const site = s.sites.find((t) => t.id === siteId);
+    if (!site) return { ok: false, reason: "noSite" };
+    const goal = siteEntrance(site);
+    if (!roadAt(s, goal.gx, goal.gy)) return { ok: false, reason: "noRoad" };
+    type Src = { kind: "camp" | "depot" | "sawmill"; id: number; e: Pos; stock: number };
+    // les planches viennent des scieries, les bûches des camps et des dépôts
+    const all: Src[] = (
+      site.mat === "plank"
+        ? [
+            ...s.sawmills.map((m): Src => ({ kind: "sawmill", id: m.id, e: sawmillEntrance(m), stock: m.planks })),
+            ...s.depots.map((d): Src => ({ kind: "depot", id: d.id, e: depotEntrance(d), stock: d.planks ?? 0 })),
+          ]
+        : [
+            ...s.camps.map((c): Src => ({ kind: "camp", id: c.id, e: campEntrance(c), stock: c.wood })),
+          ]
+    ).filter((x) => roadAt(s, x.e.gx, x.e.gy));
+    const linked = (list: Src[]) => {
+      const r = roadRoute(s, list.map((x) => x.e), [goal]);
+      if (!r) return null;
+      return { src: list.find((x) => x.e.gx === r.start.gx && x.e.gy === r.start.gy)!, start: r.start, path: r.path };
+    };
+    const r = linked(wantMat ? all.filter((x) => x.stock > 0) : all);
+    if (r) return { ok: true, src: { kind: r.src.kind, id: r.src.id }, access: r.start, route: r.path };
+    return linked(all) ? { ok: false, reason: "noWood" } : { ok: false, reason: "noRoad" };
+  }
+
+  // La zone délimitée décide du métier : des arbres dedans, et le personnage devient bûcheron.
+  private assignZone(zone: Zone, cx: number, cy: number) {
+    const w = this.selected;
+    if (!w) return;
+    if (w.data.workplace?.kind !== "camp") {
+      toast(`${w.name} n'est pas bûcheron : embauche-le d'abord dans un camp de bûcheron (menu du camp › Recruter).`);
+      return;
+    }
+    const now = Date.now();
+    const n = this.terrain.treesIn(zone, (idx) => isFelled(this.save, idx, now)).length;
+    if (n === 0) {
+      this.floatText(cx, cy, "Rien à faire ici : choisis une zone boisée");
+      return;
+    }
+    w.startWood(zone, this.env);
+    toast(`${w.name} coupera les ${n} arbre${n > 1 ? "s" : ""} de cette zone.`);
+  }
+
+  // Tant qu'une maison a une place libre, un villageois finit par arriver : il vient de la campagne et marche jusqu'à sa maison.
+  // Les villageois s'occupent eux-mêmes de leur maison : quand l'eau ou la nourriture passe à la moitié, un habitant disponible (qui ne
+  // fait rien) part en chercher à une source reliée par un chemin. À sec, n'importe quel habitant qui a les mains libres s'y met,
+  // même au milieu d'un travail : il le reprendra ensuite.
+  private autoErrands() {
+    const s = this.save;
+    for (const house of s.houses) {
+      for (const food of [false, true]) {
+        const level = food ? house.food ?? 0 : house.water ?? 0;
+        const cap = food ? HOUSE_FOOD_CAP : HOUSE_WATER_CAP;
+        if (level > Math.floor(cap / 2)) continue;
+        const folks = this.workers.filter((o) => o.data.home === house.id);
+        // déjà quelqu'un en route pour la même chose
+        if (folks.some((o) => o.data.job?.type === "water" && !!o.data.job.food === food)) continue;
+        // les habitants sans emploi d'abord ; sinon un employé y va aussi (il reprend son travail ensuite)
+        const free = folks.filter((o) => !o.resting && o.data.job?.type !== "water" && (o.data.carry === 0 || o.data.cargo === "water")).sort((x, y) => Number(!!x.data.workplace) - Number(!!y.data.workplace));
+        const w = free[0];
+        if (!w || !this.waterTarget(house.id, true, food).ok) continue;
+        w.startWater(house.id, this.env, food);
+        persist(s);
+      }
+    }
+  }
+
+  private updateArrivals(dt: number) {
+    const s = this.save;
+    const free = s.houses.length * HOUSE_CAPACITY - this.workers.length;
+    if (free <= 0 || this.workers.length >= MAX_CREW) {
+      this.arrivalT = 0;
+      return;
+    }
+    if (s.houses.some(houseThirsty) || s.houses.some(houseHungry)) return; // sans eau ni nourriture, personne ne vient s'installer
+    if (this.workers.some((w) => (w.data.discontent ?? 0) >= 70)) return; // ni tant qu'un habitant est très mécontent
+    // il lui faut une maison avec une place libre et pas trop gênée
+    if (!s.houses.some((h) => this.workers.filter((o) => o.data.home === h.id).length < HOUSE_CAPACITY && nuisanceLevel(s, h) < HOME_OK_NUISANCE)) return;
+    this.arrivalT += dt;
+    if (this.arrivalT < this.arrivalSec) return;
+    this.arrivalT = 0;
+    // la maison qui a de la place, la plus proche du centre du village
+    const house = s.houses.find((h) => this.workers.filter((o) => o.data.home === h.id).length < HOUSE_CAPACITY && nuisanceLevel(s, h) < HOME_OK_NUISANCE) ?? s.houses[0];
+    const door = houseEntrance(house);
+    // il arrive de loin, par un endroit d'où il peut marcher jusqu'à la porte
+    let from: Pos | null = null;
+    const start = Math.random() * Math.PI * 2;
+    for (const r of [16, 13, 10, 7]) {
+      for (let k = 0; k < 16 && !from; k++) {
+        const a = start + (k / 16) * Math.PI * 2;
+        const c = { gx: Math.round(door.gx + Math.cos(a) * r), gy: Math.round(door.gy + Math.sin(a) * r) };
+        if (walkable(s, c.gx, c.gy) && findPath(s, c, door)) from = c;
+      }
+      if (from) break;
+    }
+    const spot = from ?? { gx: door.gx, gy: door.gy };
+    const d = addVillager(s, spot.gx + 0.5, spot.gy + 0.5, true);
+    const w = new Worker(d);
+    this.workers.push(w);
+    this.assignHomes();
+    w.sendHome(this.env);
+    persist(s);
+    toast("Un nouveau villageois s'installe au village !");
+  }
+
+  // Chaque villageois sans logement prend une place dans la maison la plus proche qui n'est pas pleine.
+  private assignHomes() {
+    const s = this.save;
+    let changed = false;
+    for (const w of this.workers) {
+      if (w.data.home != null && s.houses.some((h) => h.id === w.data.home)) continue;
+      if (w.data.home != null) changed = true;
+      w.data.home = null;
+      const free = s.houses
+        .filter((h) => this.workers.filter((o) => o.data.home === h.id).length < HOUSE_CAPACITY)
+        .filter((h) => {
+          const n = nuisanceLevel(s, h);
+          return n < HOME_OK_NUISANCE && !(w.data.shunned?.includes(h.id) && n >= HOME_RETURN_OK); // il évite les maisons trop gênées
+        })
+        .sort((a, b) => Math.hypot(a.gx - w.x, a.gy - w.y) - Math.hypot(b.gx - w.x, b.gy - w.y))[0];
+      if (free) {
+        w.data.home = free.id;
+        changed = true;
+      }
+    }
+    if (changed) persist(s);
+  }
+
+  // Un villageois menace de partir, se calme, ou quitte sa maison.
+  private onDiscontent(ev: DiscontentEvent) {
+    const data = ev.worker;
+    if (ev.kind === "threat") toast(`💢 ${data.name} menace de partir : les nuisances autour de sa maison l'exaspèrent !`);
+    else if (ev.kind === "calm") toast(`${data.name} s'est calmé.`);
+    else if (ev.house) {
+      // il part pour de bon : il quitte la maison puis le village, le joueur perd un villageois
+      const w = this.workers.find((o) => o.data === data);
+      if (w) {
+        w.leave(this.env); // il sort sur une case libre devant la porte (sa maison est encore connue ici)
+        w.stop(this.env); // il lâche son travail (arbre, gibier visé…)
+        if (this.selected === w) this.selected = null;
+      }
+      this.save.workers = this.save.workers.filter((k) => k !== data);
+      this.workers = this.workers.filter((o) => o.data !== data);
+      toast(`${data.name} a quitté le village pour de bon, exaspéré${w?.fem ? "e" : ""} par les nuisances. Un nouveau villageois reviendra dans un moment.`);
+      this.arrivalT = this.arrivalSec - DEPARTURE_RETURN_SEC; // le prochain arrivera au plus tôt dans DEPARTURE_RETURN_SEC secondes
+      if (w) {
+        data.home = null;
+        data.threat = undefined;
+        data.carry = 0;
+        data.resting = false;
+        // il s'éloigne vers un endroit lointain, à pied, puis s'efface
+        const here = w.cell;
+        for (const r of [26, 20, 14]) {
+          let path: [number, number][] | null = null;
+          const start = Math.random() * Math.PI * 2;
+          for (let k = 0; k < 16 && !path; k++) {
+            const a = start + (k / 16) * Math.PI * 2;
+            const target = { gx: Math.round(here.gx + Math.cos(a) * r), gy: Math.round(here.gy + Math.sin(a) * r) };
+            if (walkable(this.save, target.gx, target.gy)) path = findPath(this.save, here, target);
+          }
+          if (path && path.length) {
+            w.moveTo(path, this.env);
+            break;
+          }
+        }
+        this.leavers.push({ w, t: 0 });
+      }
+      persist(this.save);
+    }
+  }
+
+  // ---------- emploi ----------
+
+  // Les employés d'un bâtiment.
+  private employeesAt(kind: WorkplaceKind, id: number): Worker[] {
+    return this.workers.filter((w) => w.data.workplace?.kind === kind && w.data.workplace.id === id);
+  }
+
+  // Combien d'ouvriers sont à leur poste dans la scierie ou la boucherie (c'est ce qui la fait tourner).
+  private staffAt(kind: "sawmill" | "butcher", id: number): number {
+    return this.workers.filter((w) => w.data.job?.type === "haul" && w.data.job.craft && w.data.job.dest === kind && w.data.job.depotId === id && w.crafting).length;
+  }
+
+  private workplaceExists(kind: WorkplaceKind, id: number): boolean {
+    const s = this.save;
+    const list: { id: number }[] =
+      kind === "camp" ? s.camps : kind === "lodge" ? s.lodges : kind === "apiary" ? s.apiaries : kind === "clinic" ? s.clinics : kind === "church" ? s.churches : kind === "site" ? s.sites.filter((t) => !t.undo) : kind === "depot" || kind === "gather" ? s.depots : kind === "port" ? s.ports : kind === "sawmill" ? s.sawmills : s.butchers;
+    return list.some((m) => m.id === id);
+  }
+
+  private workplaceName(kind: WorkplaceKind): string {
+    return { camp: "camp de bûcheron", lodge: "camp de chasseur", apiary: "rucher", clinic: "maison du soigneur", church: "église", site: "chantier", depot: "dépôt", gather: "dépôt (cueillette)", port: "port", sawmill: "scierie", butcher: "boucherie" }[kind];
+  }
+
+  // Donne à l'employé le travail de son poste.
+  private startJob(w: Worker, kind: WorkplaceKind, id: number) {
+    const s = this.save;
+    if (kind === "camp") {
+      const c = s.camps.find((k) => k.id === id);
+      if (c) w.startWood({ kind: "circle", cx: c.gx + 1, cy: c.gy + 1, r: LUMBER_RADIUS }, this.env); // il coupe les arbres autour de son camp
+    } else if (kind === "lodge") w.startHunt(id, this.env);
+    else if (kind === "apiary") w.startBee(id, this.env);
+    else if (kind === "clinic") w.startHeal(id, this.env);
+    else if (kind === "church") w.startBury(id, this.env);
+    else if (kind === "site") w.startBuild(id, this.env);
+    else if (kind === "gather") w.startGather(id, this.env);
+    else if (kind === "depot" || kind === "port") w.startHaul(0, this.env, "any"); // le porteur transporte tout
+    else w.startCraft(kind, id, this.env);
+  }
+
+  // Embauche un villageois dans ce bâtiment (s'il reste un poste) ; s'il avait un autre emploi, il le quitte.
+  private hire(w: Worker, kind: WorkplaceKind, id: number): boolean {
+    if (!this.workplaceExists(kind, id)) return false;
+    const already = w.data.workplace?.kind === kind && w.data.workplace.id === id;
+    if (!already && this.employeesAt(kind, id).length >= JOBS[kind].slots) {
+      toast(`Plus de poste libre : ce ${this.workplaceName(kind)} emploie déjà ${JOBS[kind].slots} personne${JOBS[kind].slots > 1 ? "s" : ""}.`);
+      return false;
+    }
+    this.fire(w, true);
+    w.data.workplace = { kind, id };
+    this.startJob(w, kind, id);
+    persist(this.save);
+    toast(`${w.name} est embauché · ${JOBS[kind].label} (${this.workplaceName(kind)}).`);
+    return true;
+  }
+
+  // Vire un villageois : il quitte son emploi et redevient disponible.
+  private fire(w: Worker, quiet = false) {
+    w.data.workplace = undefined;
+    w.stop(this.env);
+    w.setRole("none", this.env);
+    w.data.carry = 0; // il lâche ce qu'il portait
+    w.data.cargo = undefined;
+    persist(this.save);
+    if (!quiet) toast(`${w.name} est renvoyé${w.fem ? "e" : ""} : ${w.fem ? "elle" : "il"} n'a plus d'emploi.`);
+  }
+
+  // Une fois par seconde : un employé dont le bâtiment a disparu perd son emploi ; celui qui n'a plus de travail en reprend un.
+  private reconcileEmployment() {
+    for (const w of this.workers) {
+      const p = w.data.workplace;
+      if (!p) continue;
+      if (!this.workplaceExists(p.kind, p.id)) {
+        w.data.workplace = undefined; // chantier terminé, bâtiment démonté : il est de nouveau sans emploi
+        w.stop(this.env);
+        w.setRole("none", this.env);
+        continue;
+      }
+      if (!w.data.job && !w.resting && !w.data.resume && !w.inside) this.startJob(w, p.kind, p.id);
+    }
+  }
+
+  // Anciennes parties : un villageois qui avait un travail sans employeur est rattaché au bâtiment concerné.
+  private migrateEmployment() {
+    const s = this.save;
+    for (const w of this.workers) {
+      const j = w.data.job;
+      if (!j || w.data.workplace) continue;
+      let p: { kind: WorkplaceKind; id: number } | null = null;
+      if (j.type === "hunt" && s.lodges.some((k) => k.id === j.lodgeId)) p = { kind: "lodge", id: j.lodgeId };
+      else if (j.type === "bee" && s.apiaries.some((k) => k.id === j.apiaryId)) p = { kind: "apiary", id: j.apiaryId };
+      else if (j.type === "build" && s.sites.some((k) => k.id === j.siteId)) p = { kind: "site", id: j.siteId };
+      else if (j.type === "haul" && (s.depots[0] || s.ports[0])) p = s.depots[0] ? { kind: "depot", id: s.depots[0].id } : { kind: "port", id: s.ports[0].id };
+      else if (j.type === "wood" && s.camps[0]) p = { kind: "camp", id: s.camps[0].id };
+      if (p) w.data.workplace = p;
+      else if (j.type !== "water") {
+        w.data.job = null;
+        w.data.role = "none";
+      }
+    }
+  }
+
+  // Cases où des personnages se tiennent immobiles : les trajets les contournent.
+  // Sur un chemin ou à l'entrée d'un bâtiment, les villageois se croisent sans se bloquer ; ailleurs, une seule personne par case.
+  private crossable(c: Pos): boolean {
+    return roadAt(this.save, c.gx, c.gy) || isEntrance(this.save, c.gx, c.gy);
+  }
+
+  private avoidFor(self: Worker): Set<number> {
+    return new Set(this.workers.filter((o) => o !== self && !o.moving && !o.inside && !this.crossable(o.cell)).map((o) => o.cell.gy * GRID + o.cell.gx));
+  }
+
+  // Itinéraire d'un porteur de ce dépôt : de l'entrée d'un camp (qui a du bois si wantWood) jusqu'à l'entrée du dépôt,
+  // par les chemins seulement. Les deux entrées doivent être sur un chemin continu : passer à côté ne suffit pas.
+  // Itinéraire d'un porteur vers sa destination, par les chemins, d'entrée à entrée : vers une scierie il apporte les bûches des camps,
+  // vers un dépôt les planches des scieries et la viande préparée des boucheries, vers une boucherie la viande des camps de chasseur.
+  private haulRoute(destId: number, wantWood: boolean, kind: HaulDest = "depot"): HaulRoute {
+    const s = this.save;
+    const dest =
+      kind === "sawmill" ? s.sawmills.find((m) => m.id === destId) : kind === "butcher" ? s.butchers.find((m) => m.id === destId) : kind === "port" ? s.ports.find((m) => m.id === destId) : s.depots.find((d) => d.id === destId);
+    if (!dest) return { ok: false, reason: "noDepot" };
+    const port = kind === "port" ? (dest as Port) : null;
+    const free =
+      kind === "sawmill"
+        ? SAWMILL_LOGS_CAP - (dest as Sawmill).logs
+        : kind === "butcher"
+          ? BUTCHER_MEAT_CAP - (dest as Butcher).meat
+          : port
+            ? portFree(port) // la place que laissent les quotas d'export
+            : depotFree(dest as Depot);
+    if (free <= 0) return { ok: false, reason: "full" };
+    type Src = { kind: "camp" | "sawmill" | "lodge" | "butcher" | "depot"; id: number; e: Pos; stock: number };
+    const sources: Src[] =
+      kind === "sawmill"
+        ? s.camps.map((c): Src => ({ kind: "camp", id: c.id, e: campEntrance(c), stock: c.wood }))
+        : kind === "butcher"
+          ? s.lodges.map((m): Src => ({ kind: "lodge", id: m.id, e: lodgeEntrance(m), stock: m.meat }))
+          : port
+            ? s.depots.map((d): Src => {
+                const e = exportableAt(d, [port]);
+                return { kind: "depot", id: d.id, e: depotEntrance(d), stock: e.plank + e.cuts + e.honey + e.berries };
+              })
+            : [
+                ...s.sawmills.map((m): Src => ({ kind: "sawmill", id: m.id, e: sawmillEntrance(m), stock: m.planks })),
+                ...s.butchers.map((m): Src => ({ kind: "butcher", id: m.id, e: butcherEntrance(m), stock: m.cuts })),
+              ];
+    if (!sources.length) return { ok: false, reason: "noCamp" };
+    const goal = kind === "sawmill" ? sawmillEntrance(dest as Sawmill) : kind === "butcher" ? butcherEntrance(dest as Butcher) : port ? portEntrance(port) : depotEntrance(dest as Depot);
+    if (!roadAt(s, goal.gx, goal.gy)) return { ok: false, reason: "noRoad" };
+    const all = sources.filter((x) => roadAt(s, x.e.gx, x.e.gy));
+    const linked = (list: Src[]) => {
+      const r = roadRoute(s, list.map((x) => x.e), [goal]);
+      if (!r) return null;
+      return { src: list.find((x) => x.e.gx === r.start.gx && x.e.gy === r.start.gy)!, start: r.start, path: r.path };
+    };
+    const r = linked(wantWood ? all.filter((x) => x.stock > 0) : all);
+    if (r) return { ok: true, src: { kind: r.src.kind, id: r.src.id }, campAccess: r.start, route: r.path };
+    // aucune source avec du stock n'est reliée : soit aucune n'est reliée, soit les sources reliées sont vides
+    return linked(all) ? { ok: false, reason: "empty" } : { ok: false, reason: "noRoad" };
+  }
+
+  // Le bâtiment est-il relié par un chemin continu à un autre (camp ↔ dépôt) ?
+  private linkedTo(entrance: Pos, others: Pos[]): boolean {
+    const s = this.save;
+    return roadAt(s, entrance.gx, entrance.gy) && !!roadRoute(s, [entrance], others.filter((e) => roadAt(s, e.gx, e.gy)));
+  }
+
+  // Ce que le jeu met à la disposition des personnages pour travailler.
+  private makeEnv(): WorkerEnv {
+    return {
+      findPath: (from, to, self) => findPath(this.save, from, to, false, this.avoidFor(self)),
+      // une case est prise si un autre personnage s'y tient ou vient de la réserver
+      taken: (cell, self) => !this.crossable(cell) && this.workers.some((o) => o !== self && !o.inside && (sameCell(o.cell, cell) || (!!o.nextCell && sameCell(o.nextCell, cell)))),
+      blockerAt: (cell, self) => this.crossable(cell) ? null : this.workers.find((o) => o !== self && !o.inside && (sameCell(o.cell, cell) || (!!o.nextCell && sameCell(o.nextCell, cell)))) ?? null,
+      isWalkable: (gx, gy) => walkable(this.save, gx, gy),
+      treesIn: (zone) => this.terrain.treesIn(zone, (i) => isFelled(this.save, i, Date.now())),
+      isFelled: (idx) => isFelled(this.save, idx, Date.now()),
+      claimed: this.claimed,
+      // le bois abattu est chargé sur le dos du bûcheron : il n'entre pas dans le stock
+      chop: (_w, idx) => {
+        const wood = felTree(this.save, idx, Date.now());
+        const o = objects[idx];
+        const p = this.toClient(o.x * C, o.y * C);
+        this.floatText(p.x, p.y, `+${wood} 🪵 sur le dos`);
+        return wood;
+      },
+      // camps qui ont encore de la place : on y travaille à leur entrée
+      camps: () => this.save.camps.filter((c) => c.wood < CAMP_CAPACITY).map(campEntrance),
+      hasCamps: () => this.save.camps.length > 0,
+      // arrivé à l'entrée d'un camp : le bois est stocké là, dans la limite de sa capacité
+      deposit: (n, w) => {
+        const dist = (c: Camp) => Math.hypot(campEntrance(c).gx + 0.5 - w.x, campEntrance(c).gy + 0.5 - w.y);
+        const camp = this.save.camps.filter((c) => c.wood < CAMP_CAPACITY).sort((a, b) => dist(a) - dist(b))[0];
+        if (!camp) return 0;
+        const taken = depositAtCamp(camp, n);
+        const p = this.toClient(w.x * C, w.y * C);
+        this.floatText(p.x, p.y, `+${taken} 🪵 au camp${taken < n ? " (plein)" : ""}`);
+        persist(this.save);
+        return taken;
+      },
+      // porteur : il appartient à un dépôt
+      anyHaulTask: (from, cargo) => this.anyHaulTask(from, cargo),
+      craftReady: (kind, id) => {
+        const m = kind === "sawmill" ? this.save.sawmills.find((k) => k.id === id) : this.save.butchers.find((k) => k.id === id);
+        return !!m && (kind === "sawmill" ? sawmillWorking(m as Sawmill) : butcherWorking(m as Butcher));
+      },
+      craftInfo: (kind, id) => {
+        const m = kind === "sawmill" ? this.save.sawmills.find((k) => k.id === id) : this.save.butchers.find((k) => k.id === id);
+        if (!m) return null;
+        return { entrance: kind === "sawmill" ? sawmillEntrance(m) : butcherEntrance(m), center: { x: m.gx + 1.5, y: m.gy + 1.5 } };
+      },
+      apiaryInfo: (id) => {
+        const m = this.save.apiaries.find((k) => k.id === id);
+        return m ? { care: m.care, honey: m.honey, entrance: apiaryEntrance(m) } : null;
+      },
+      tendApiary: (id) => {
+        const m = this.save.apiaries.find((k) => k.id === id);
+        if (m) tendApiary(m);
+        persist(this.save);
+      },
+      harvestApiary: (id, max) => {
+        const m = this.save.apiaries.find((k) => k.id === id);
+        persist(this.save);
+        return m ? harvestApiary(m, max) : 0;
+      },
+      // fossoyeur
+      churchInfo: (id) => this.save.churches.some((k) => k.id === id),
+      buryPlan: (id, from, w) => this.buryPlan(id, from, w),
+      buryDo: (plan, w) => this.buryDo(plan, w),
+      // soigneur
+      clinicInfo: (id) => this.save.clinics.some((k) => k.id === id),
+      quarantined: (w) => !!this.save.houses.find((h) => h.id === w.data.home)?.quarantine,
+      healPlan: (id, from, w) => this.healPlan(id, from, w),
+      healDo: (plan, w) => this.healDo(plan, w),
+      // cueilleur : l'arbuste à baies mûr le plus proche, dans le rayon de son dépôt
+      berryTarget: (depotId, from, claim, skip) => {
+        if (!this.save.depots.some((k) => k.id === depotId)) return null;
+        this.berryList ??= objects.map((o, i) => (o.kind === "berry" ? i : -1)).filter((i) => i >= 0);
+        let best = -1;
+        let bestD = Infinity;
+        for (const i of this.berryList) {
+          if (this.claimed.has(i) || skip.has(i) || isPicked(this.save, i)) continue;
+          const d = Math.hypot(objects[i].x - from.gx, objects[i].y - from.gy);
+          if (d < bestD) {
+            best = i;
+            bestD = d;
+          }
+        }
+        if (best < 0) return null;
+        if (claim) this.claimed.add(best);
+        return { idx: best, x: objects[best].x, y: objects[best].y };
+      },
+      pickBerries: (idx) => {
+        const n = pickBush(this.save, idx);
+        persist(this.save);
+        return n;
+      },
+      depositBerries: (depotId, n, w) => {
+        const d = this.save.depots.find((k) => k.id === depotId);
+        const taken = d ? addBerriesToDepot(d, n) : 0;
+        const p = this.toClient(w.x * C, w.y * C);
+        this.floatText(p.x, p.y, `+${taken} 🫐 au dépôt`);
+        persist(this.save);
+        return taken;
+      },
+      // le dépôt le plus proche qui a de la place pour le miel
+      honeyDepot: (from) => {
+        const d = this.save.depots
+          .filter((k) => depotFree(k) > 0)
+          .sort((a, b) => Math.hypot(depotEntrance(a).gx - from.gx, depotEntrance(a).gy - from.gy) - Math.hypot(depotEntrance(b).gx - from.gx, depotEntrance(b).gy - from.gy))[0];
+        return d ? { id: d.id, entrance: depotEntrance(d) } : null;
+      },
+      depositHoney: (depotId, n, w) => {
+        const d = this.save.depots.find((k) => k.id === depotId);
+        const taken = d ? addHoneyToDepot(d, n) : 0;
+        const p = this.toClient(w.x * C, w.y * C);
+        this.floatText(p.x, p.y, `+${taken} 🍯 au dépôt`);
+        persist(this.save);
+        return taken;
+      },
+      exportGood: (depotId, portId) => {
+        const d = this.save.depots.find((k) => k.id === depotId);
+        const p = this.save.ports.find((k) => k.id === portId);
+        if (!d || !p) return null;
+        const e = exportableAt(d, [p]);
+        return e.plank > 0 ? "plank" : e.cuts > 0 ? "cuts" : e.honey > 0 ? "honey" : e.berries > 0 ? "berries" : null;
+      },
+      depotInfo: (id, dest, good) => {
+        if (dest === "sawmill") {
+          const m = this.save.sawmills.find((k) => k.id === id);
+          return m ? { free: SAWMILL_LOGS_CAP - m.logs } : null;
+        }
+        if (dest === "butcher") {
+          const m = this.save.butchers.find((k) => k.id === id);
+          return m ? { free: BUTCHER_MEAT_CAP - m.meat } : null;
+        }
+        if (dest === "port") {
+          const m = this.save.ports.find((k) => k.id === id);
+          return m ? { free: good ? portSpace(m, good) : portFree(m) } : null;
+        }
+        const d = this.save.depots.find((k) => k.id === id);
+        return d ? { free: depotFree(d) } : null;
+      },
+      haulRoute: (depotId, wantWood, dest) => this.haulRoute(depotId, wantWood, dest),
+      roadPath: (from, to, self) => (roadAt(this.save, to.gx, to.gy) ? findPath(this.save, from, to, true, this.avoidFor(self)) : null),
+      depositDepot: (depotId, n, w, dest, plank, cuts, honey, berries) => {
+        const p = this.toClient(w.x * C, w.y * C);
+        let taken = 0;
+        if (dest === "sawmill") {
+          const m = this.save.sawmills.find((k) => k.id === depotId);
+          taken = m ? addLogs(m, n) : 0;
+          this.floatText(p.x, p.y, `+${taken} 🪵 à la scierie`);
+        } else if (dest === "port") {
+          const m = this.save.ports.find((k) => k.id === depotId);
+          taken = m ? addToPort(m, n, berries ? "berries" : honey ? "honey" : cuts ? "cuts" : "plank") : 0;
+          this.floatText(p.x, p.y, `+${taken} ${berries ? "🫐" : honey ? "🍯" : cuts ? "🥩" : "🪚"} au port`);
+        } else if (dest === "butcher") {
+          const m = this.save.butchers.find((k) => k.id === depotId);
+          taken = m ? addRawMeat(m, n) : 0;
+          this.floatText(p.x, p.y, `+${taken} 🍖 à la boucherie`);
+        } else {
+          const d = this.save.depots.find((k) => k.id === depotId);
+          taken = d ? (cuts ? addCutsToDepot(d, n) : plank ? addPlanksToDepot(d, n) : addToDepot(d, n)) : 0;
+          this.floatText(p.x, p.y, `+${taken} ${cuts ? "🥩" : plank ? "🪚" : "🪵"} en stock`);
+        }
+        persist(this.save);
+        return taken;
+      },
+      onRoad: (gx, gy) => roadAt(this.save, gx, gy),
+      spawnSpot: (self) => this.spawnSpot(self),
+      lodgeInfo: (id) => {
+        const m = this.save.lodges.find((k) => k.id === id);
+        return m ? { free: lodgeFree(m), entrance: lodgeEntrance(m) } : null;
+      },
+      // le gibier libre le plus proche du chasseur, dans le rayon du camp ; il est alors réservé pour lui
+      preyNear: (lodgeId, from) => {
+        const m = this.save.lodges.find((k) => k.id === lodgeId);
+        if (!m) return null;
+        const e = lodgeEntrance(m);
+        const prey = this.animals
+          .filter((a) => !a.dead && !this.preyClaimed.has(a.id) && Math.hypot(a.x - (e.gx + 0.5), a.y - (e.gy + 0.5)) <= HUNT_RADIUS)
+          .sort((a, b) => Math.hypot(a.x - from.gx, a.y - from.gy) - Math.hypot(b.x - from.gx, b.y - from.gy))[0];
+        if (!prey) return null;
+        this.preyClaimed.add(prey.id);
+        return { id: prey.id, x: prey.x, y: prey.y };
+      },
+      preyPos: (id) => {
+        const a = this.animals.find((k) => k.id === id);
+        return a && !a.dead ? { x: a.x, y: a.y } : null;
+      },
+      releasePrey: (id) => {
+        this.preyClaimed.delete(id);
+      },
+      kill: (id) => {
+        const a = this.animals.find((k) => k.id === id);
+        if (!a || a.dead) return 0;
+        a.dead = true;
+        const p = this.toClient(a.x * C, a.y * C);
+        const meat = Math.max(1, Math.round(a.meat * this.season().rules.meat)); // l'automne, le gibier est plus gras
+        this.floatText(p.x, p.y, `+${meat} 🍖`);
+        return meat;
+      },
+      depositMeat: (lodgeId, n, w) => {
+        const m = this.save.lodges.find((k) => k.id === lodgeId);
+        const taken = m ? addMeat(m, n) : 0;
+        const p = this.toClient(w.x * C, w.y * C);
+        this.floatText(p.x, p.y, `+${taken} 🍖 au camp`);
+        persist(this.save);
+        return taken;
+      },
+      hungry: (w) => (w.data.hunger ?? 0) >= NEED_BAD,
+      houseStock: (w, what) => {
+        const h = this.save.houses.find((k) => k.id === w.data.home);
+        return h ? (what === "water" ? h.water ?? 0 : h.food ?? 0) : 0;
+      },
+      satisfy: (w) => {
+        const h = this.save.houses.find((k) => k.id === w.data.home);
+        if (!h) return;
+        if ((w.data.thirst ?? 0) > 20 && (h.water ?? 0) > 0) {
+          h.water = (h.water ?? 0) - 1;
+          w.data.thirst = 0;
+        }
+        if ((w.data.hunger ?? 0) > 20 && (h.food ?? 0) > 0) {
+          h.food = (h.food ?? 0) - 1;
+          w.data.hunger = 0;
+        }
+        persist(this.save);
+      },
+      night: () => darkness(clockHour(this.save.clock)),
+      climate: () => ({ drain: this.season().rules.drain, speed: this.season().rules.speed }),
+      thirsty: (w) => (w.data.thirst ?? 0) >= NEED_BAD,
+      waterTarget: (houseId, needWater, food) => this.waterTarget(houseId, needWater, !!food),
+      takeWater: (srcId, max, food, kind) => {
+        persist(this.save);
+        if (food) {
+          if (kind === "depot") {
+            const d = this.save.depots.find((k) => k.id === srcId);
+            if (!d) return 0;
+            const nc = Math.min(max, d.cuts ?? 0);
+            d.cuts = (d.cuts ?? 0) - nc;
+            const nb = Math.min(max - nc, d.berries ?? 0); // puis les baies
+            d.berries = (d.berries ?? 0) - nb;
+            return nc + nb;
+          }
+          const b = this.save.butchers.find((k) => k.id === srcId);
+          return b ? takeCuts(b, max) : 0;
+        }
+        const m = this.save.wells.find((k) => k.id === srcId);
+        return m ? takeWater(m, max) : 0;
+      },
+      deliverWater: (houseId, n, w, food) => {
+        const h = this.save.houses.find((k) => k.id === houseId);
+        const taken = h ? (food ? addFood(h, n) : addWater(h, n)) : 0;
+        const p = this.toClient(w.x * C, w.y * C);
+        this.floatText(p.x, p.y, food ? `+${taken} 🥩 à la maison` : `+${taken} 💧 à la maison`);
+        persist(this.save);
+        return taken;
+      },
+      homeEntrance: (w) => {
+        const h = this.save.houses.find((k) => k.id === w.data.home);
+        return h ? houseEntrance(h) : null;
+      },
+      // bâtisseur
+      siteInfo: (id) => {
+        const t = this.save.sites.find((k) => k.id === id);
+        return t && !t.undo ? { missing: siteMissing(t), ready: siteReady(t), entrance: siteEntrance(t), plank: t.mat === "plank" } : null;
+      },
+      buildRoute: (siteId, wantWood) => this.buildRoute(siteId, wantWood),
+      takeFromSource: (src, max, plank, cuts, honey, berries) => {
+        persist(this.save);
+        if (src.kind === "sawmill") {
+          const m = this.save.sawmills.find((k) => k.id === src.id);
+          return m ? takePlanks(m, max) : 0;
+        }
+        if (src.kind === "depot") {
+          const d = this.save.depots.find((k) => k.id === src.id);
+          if (!d) return 0;
+          if (plank) {
+            const n = Math.min(max, d.planks ?? 0);
+            d.planks = (d.planks ?? 0) - n;
+            return n;
+          }
+          if (berries) {
+            const n = Math.min(max, d.berries ?? 0);
+            d.berries = (d.berries ?? 0) - n;
+            return n;
+          }
+          if (honey) {
+            const n = Math.min(max, d.honey ?? 0);
+            d.honey = (d.honey ?? 0) - n;
+            return n;
+          }
+          if (cuts) {
+            const n = Math.min(max, d.cuts ?? 0);
+            d.cuts = (d.cuts ?? 0) - n;
+            return n;
+          }
+          const n = Math.min(max, d.wood);
+          d.wood -= n;
+          return n;
+        }
+        if (src.kind === "lodge") {
+          const m = this.save.lodges.find((k) => k.id === src.id);
+          return m ? takeMeat(m, max) : 0;
+        }
+        if (src.kind === "butcher") {
+          const m = this.save.butchers.find((k) => k.id === src.id);
+          return m ? takeCuts(m, max) : 0;
+        }
+        const c = this.save.camps.find((k) => k.id === src.id);
+        if (!c) return 0;
+        const n = Math.min(max, c.wood);
+        c.wood -= n;
+        return n;
+      },
+      depositSite: (siteId, n, w) => {
+        const t = this.save.sites.find((k) => k.id === siteId);
+        const taken = t ? addToSite(t, n) : 0;
+        const p = this.toClient(w.x * C, w.y * C);
+        this.floatText(p.x, p.y, t?.mat === "plank" ? `+${taken} planche${taken > 1 ? "s" : ""} au chantier` : `+${taken} 🪵 au chantier`);
+        persist(this.save);
+        return taken;
+      },
+      workCell: (siteId, from) => {
+        const t = this.save.sites.find((k) => k.id === siteId);
+        return t ? workCell(this.save, t, from) : null;
+      },
+      work: (siteId, dt) => {
+        const t = this.save.sites.find((k) => k.id === siteId);
+        if (!t) return true;
+        const done = workOnSite(this.save, t, dt);
+        if (done) {
+          if (this.siteSel === t) this.siteSel = null;
+          persist(this.save);
+        } else if (!this.dirtyAt) this.dirtyAt = performance.now();
+        return done;
+      },
+      changed: () => {
+        if (!this.dirtyAt) this.dirtyAt = performance.now();
+      },
+      notify: (text) => toast(text),
+    };
+  }
+
+  // ---------- construction ----------
+
+  private roadsChanged = false;
+
+  // Pose une case de chemin pendant un glissement ; le message d'erreur n'apparaît que sur la première case.
+  private paintRoad(c: Pos, cx: number, cy: number, first: boolean) {
+    const r = placeRoad(this.save, c.gx, c.gy);
+    if (r === "ok") {
+      this.roadsChanged = true;
+      clearBerries(this.save, c.gx, c.gy, 1, 1); // un arbuste à baies sous le chemin disparaît
+    }
+    else if (first && r !== "already") this.floatText(cx, cy, BUILD_MESSAGES[r]);
+  }
+
+  private buildTap(wx: number, wy: number, cx: number, cy: number) {
+    const sel = this.build.selected;
+    if (!sel) return;
+    const c = this.cellOf(wx, wy);
+    if (!c) return;
+    if (sel === ERASE) {
+      const camp = campAt(this.save, c.gx, c.gy);
+      const depot = depotAt(this.save, c.gx, c.gy);
+      const site = siteAt(this.save, c.gx, c.gy);
+      const house = houseAt(this.save, c.gx, c.gy);
+      const mill = sawmillAt(this.save, c.gx, c.gy);
+      const pit = wellAt(this.save, c.gx, c.gy);
+      const hut = lodgeAt(this.save, c.gx, c.gy);
+      const shop = butcherAt(this.save, c.gx, c.gy);
+      const dock = portAt(this.save, c.gx, c.gy);
+      const minster = churchAt(this.save, c.gx, c.gy);
+      const infirm = clinicAt(this.save, c.gx, c.gy);
+      const hive = apiaryAt(this.save, c.gx, c.gy);
+      if (minster) {
+        removeChurch(this.save, minster);
+        if (this.churchSel === minster) this.churchSel = null;
+      } else if (infirm) {
+        removeClinic(this.save, infirm);
+        if (this.clinicSel === infirm) this.clinicSel = null;
+      } else if (hive) {
+        removeApiary(this.save, hive);
+        if (this.apiarySel === hive) this.apiarySel = null;
+      } else if (dock) {
+        removePort(this.save, dock);
+        if (this.portSel === dock) this.portSel = null;
+      } else if (shop) {
+        removeButcher(this.save, shop);
+        if (this.butcherSel === shop) this.butcherSel = null;
+      } else if (hut) {
+        removeLodge(this.save, hut);
+        if (this.lodgeSel === hut) this.lodgeSel = null;
+      } else if (pit) {
+        removeWell(this.save, pit);
+        if (this.wellSel === pit) this.wellSel = null;
+      } else if (mill) {
+        removeSawmill(this.save, mill);
+        if (this.sawmillSel === mill) this.sawmillSel = null;
+      } else if (house) {
+        removeHouse(this.save, house);
+        if (this.houseSel === house) this.houseSel = null;
+        for (const w of this.workers) if (w.data.home === null) w.data.inside = false;
+      } else if (site) {
+        removeSite(this.save, site);
+        if (this.siteSel === site) this.siteSel = null;
+      } else if (camp) {
+        removeCamp(this.save, camp);
+        if (this.campSel === camp) this.campSel = null;
+      } else if (depot) {
+        removeDepot(this.save, depot);
+        if (this.depotSel === depot) this.depotSel = null;
+      } else if (!removeRoad(this.save, c.gx, c.gy)) return;
+      persist(this.save);
+      return;
+    }
+    const kind = STRUCTURES[sel].kind;
+    const r =
+      kind === "camp" ? placeCamp(this.save, c.gx, c.gy, false, this.buildRot) : kind === "depot" ? placeDepot(this.save, c.gx, c.gy, false, this.buildRot) : kind === "house" ? placeHouse(this.save, c.gx, c.gy, false, this.buildRot) : kind === "sawmill" ? placeSawmill(this.save, c.gx, c.gy, false, this.buildRot) : kind === "well" ? placeWell(this.save, c.gx, c.gy, false, this.buildRot) : kind === "lodge" ? placeLodge(this.save, c.gx, c.gy, false, this.buildRot) : kind === "butcher" ? placeButcher(this.save, c.gx, c.gy, false, this.buildRot) : kind === "port" ? placePort(this.save, c.gx, c.gy) : kind === "apiary" ? placeApiary(this.save, c.gx, c.gy, false, this.buildRot) : kind === "clinic" ? placeClinic(this.save, c.gx, c.gy, false, this.buildRot) : kind === "church" ? placeChurch(this.save, c.gx, c.gy, false, this.buildRot) : placeRoad(this.save, c.gx, c.gy);
+    if (r === "ok") {
+      if (sel !== ERASE) clearBerries(this.save, c.gx, c.gy, STRUCTURES[sel].size, STRUCTURES[sel].size, STRUCTURES[sel].kind === "road" ? 0 : 1); // un arbuste à baies sur l'emplacement (ou devant l'entrée) disparaît
+      persist(this.save);
+    }
+    else if (r !== "already") this.floatText(cx, cy, BUILD_MESSAGES[r]);
+  }
+
+  private floatText(x: number, y: number, text: string) {
+    const d = document.createElement("div");
+    d.className = "float";
+    d.textContent = text;
+    d.style.left = `${x}px`;
+    d.style.top = `${y}px`;
+    document.body.appendChild(d);
+    setTimeout(() => d.remove(), 950);
+  }
+
+  // ---------- boucle ----------
+
+  private frame(t: number) {
+    const now = Date.now();
+    const dt = this.paused ? 0 : Math.min(0.1, (t - this.lastT) / 1000 || 0); // en pause, plus rien n'avance
+    this.lastT = t;
+    for (const got of tickDismantle(this.save, dt * this.timeScale)) {
+      const parts = [got.coins ? `+${got.coins} pièces` : "", got.wood ? `+${got.wood} 🪵` : "", got.planks ? `+${got.planks} planches` : ""].filter(Boolean).join(", ");
+      toast(parts ? `Démonté : ${parts}.` : "Démonté.");
+      persist(this.save);
+    }
+    const season = this.season().rules; // la saison règle les rythmes de ce qui suit
+    let moved = tickSawmills(this.save, dt * this.timeScale, (id) => this.staffAt("sawmill", id));
+    moved = tickWells(this.save, dt * this.timeScale * season.well) || moved;
+    moved = tickButchers(this.save, dt * this.timeScale, (id) => this.staffAt("butcher", id)) || moved;
+    moved = tickApiaries(this.save, dt * this.timeScale, season.honey, season.hive) || moved;
+    if (season.ships === 0) for (const m of this.save.ports) m.t = 0; // mer gelée : le prochain bateau repartira du début
+    for (const sale of tickPorts(this.save, dt * this.timeScale * season.ships)) {
+      const p = this.toClient((sale.port.gx + 1.5) * C, sale.port.gy * C);
+      this.floatText(p.x, p.y, `+${sale.coins} 🪙 export`);
+      persist(this.save);
+    }
+    tickCorpses(this.save, dt * this.timeScale);
+    for (const ev of tickAging(this.save, dt * this.timeScale)) this.onAge(ev);
+    for (const ev of tickHealth(this.save, dt * this.timeScale, this.season().rules.id === "winter")) this.onHealth(ev);
+    moved = tickThirst(this.save, dt * this.timeScale * season.water) || moved;
+    moved = tickHunger(this.save, dt * this.timeScale * season.food) || moved;
+    if (moved && !this.dirtyAt) this.dirtyAt = performance.now();
+    this.save.clock += dt * this.timeScale;
+    this.save.grow += dt * this.timeScale * 1000 * season.regrow; // les arbres repoussent plus vite au printemps, plus du tout en hiver
+    const step = Math.floor(this.save.clock / 5);
+    if (step !== this.clockStep) {
+      this.clockStep = step;
+      if (!this.dirtyAt) this.dirtyAt = performance.now();
+    }
+    this.updateArrivals(dt * this.timeScale);
+    for (const ev of tickDiscontent(this.save, dt * this.timeScale)) this.onDiscontent(ev);
+    for (const l of this.leavers) {
+      l.t += dt * this.timeScale;
+      l.w.update(dt * this.timeScale, this.env);
+    }
+    this.leavers = this.leavers.filter((l) => l.t < 9);
+    this.errandT -= dt * this.timeScale;
+    if (this.errandT <= 0) {
+      this.errandT = 2;
+      this.autoErrands();
+    }
+    this.homeT -= dt;
+    if (this.homeT <= 0) {
+      this.homeT = 1;
+      this.assignHomes();
+      this.reconcileEmployment();
+    }
+    for (let i = 0; i < this.timeScale; i++) for (const w of this.workers) w.update(dt, this.env);
+    const people = this.workers.filter((w) => !w.inside && w.role !== "hunt"); // les chasseurs, camouflés, ne font pas fuir le gibier
+    for (const a of this.animals) a.update(dt, this.save, people);
+    if (this.animals.some((a) => a.dead)) this.animals = this.animals.filter((a) => !a.dead);
+    this.popT -= dt;
+    if (this.popT <= 0) {
+      this.popT = REPOP_SEC / Math.max(0.1, season.repop);
+      this.repopulate();
+    }
+    if (this.dirtyAt && performance.now() - this.dirtyAt > 1500) {
+      this.dirtyAt = 0;
+      persist(this.save);
+    }
+    if (this.press?.moved) this.follow = false;
+    const sel = this.selected;
+    if (this.follow && sel) {
+      const k = Math.min(1, dt * 5);
+      this.cam.x += (sel.x * C - this.cam.x) * k;
+      this.cam.y += (sel.y * C - this.cam.y) * k;
+      this.clampCam();
+    }
+    this.draw(now, t);
+    this.drawMinimap();
+    this.updateCrew();
+    this.updateStructureMenu();
+    this.updateWorkerMenu();
+    this.ui.sync(this.save);
+    this.updateHud();
+    requestAnimationFrame((nt) => this.frame(nt));
+  }
+
+  // ---------- dessin ----------
+
+  private draw(now: number, t: number) {
+    const g = this.g;
+    const z = this.cam.zoom;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    g.setTransform(this.dpr * z, 0, 0, this.dpr * z, this.dpr * (this.w / 2 - this.cam.x * z), this.dpr * (this.h / 2 - this.cam.y * z));
+    const hw = this.w / 2 / z;
+    const hh = this.h / 2 / z;
+    const view = { x0: this.cam.x - hw, y0: this.cam.y - hh, x1: this.cam.x + hw, y1: this.cam.y + hh };
+    const felledFn = (idx: number) => isFelled(this.save, idx, now);
+    this.terrain.draw(g, view, z, { x: this.cam.x, y: this.cam.y });
+    this.terrain.drawWater(g, view, z, t);
+
+    // case visée par le pointeur
+    const sel = this.build.selected;
+    const selDef = sel && sel !== ERASE ? STRUCTURES[sel] : null;
+    let pointerWorld: { x: number; y: number } | null = null;
+    let hoverCell: Pos | null = null;
+    if (this.mouse.inside && !this.press?.moved) {
+      const w = this.toWorld(this.mouse.x, this.mouse.y);
+      pointerWorld = w;
+      hoverCell = this.cellOf(w.x, w.y);
+    }
+    this.showCellInfo(hoverCell, pointerWorld, felledFn);
+    const tileHot = !this.zoneDrag && hoverCell && (!this.build.open || !!sel) ? hoverCell : null;
+
+    // seules les cases visibles et labourées (ou survolées) se dessinent
+    const gx0 = Math.max(0, Math.floor(view.x0 / C));
+    const gx1 = Math.min(GRID - 1, Math.floor(view.x1 / C));
+    const gy0 = Math.max(0, Math.floor(view.y0 / C));
+    const gy1 = Math.min(GRID - 1, Math.floor(view.y1 / C));
+    for (let gy = gy0; gy <= gy1; gy++) {
+      for (let gx = gx0; gx <= gx1; gx++) {
+        const cell = this.save.cells[gy * GRID + gx];
+        const hot = !!tileHot && tileHot.gx === gx && tileHot.gy === gy && !selDef;
+        if (cell.kind !== "grass" || hot) drawTile(g, gx, gy, cell, now, hot, sel === ERASE, canBuild(this.save, gx, gy));
+      }
+    }
+    // en construction, une grille discrète apparaît autour du pointeur
+    if (this.build.open && hoverCell) {
+      g.strokeStyle = "rgba(255,255,255,0.22)";
+      g.lineWidth = 1;
+      g.beginPath();
+      for (let d = -5; d <= 6; d++) {
+        const a = (hoverCell.gx + d) * C;
+        const b = (hoverCell.gy + d) * C;
+        g.moveTo(a, (hoverCell.gy - 5) * C);
+        g.lineTo(a, (hoverCell.gy + 6) * C);
+        g.moveTo((hoverCell.gx - 5) * C, b);
+        g.lineTo((hoverCell.gx + 6) * C, b);
+      }
+      g.stroke();
+    }
+
+    drawRoads(g, this.save.roads, GRID, view);
+    for (const d of this.save.depots) drawDepot(g, d.gx, d.gy, d.rot, depotLevel(d));
+    for (const c of this.save.camps) drawCamp(g, c.gx, c.gy, c.rot);
+    for (const m of this.save.apiaries) drawApiary(g, m.gx, m.gy, apiaryBusy(m, this.season().rules.honey), t, m.rot);
+    for (const m of this.save.clinics) drawClinic(g, m.gx, m.gy, m.rot);
+    for (const m of this.save.churches) drawChurch(g, m.gx, m.gy, m.rot, m.graves.length);
+    for (const c of this.save.corpses) drawCorpse(g, c.x, c.y, CREW_COLORS[c.color % CREW_COLORS.length]);
+    for (const m of this.save.ports) drawPort(g, m.gx, m.gy, m.rot);
+    for (const m of this.save.ports) drawShip(g, m, t);
+    for (const m of this.save.butchers) drawButcher(g, m.gx, m.gy, butcherWorking(m) && this.staffAt("butcher", m.id) > 0, t, m.rot);
+    for (const m of this.save.lodges) drawLodge(g, m.gx, m.gy, m.rot);
+    for (const m of this.save.wells) drawWell(g, m.gx, m.gy, m.rot);
+    for (const m of this.save.sawmills) drawSawmill(g, m.gx, m.gy, sawmillWorking(m) && this.staffAt("sawmill", m.id) > 0, t, m.rot);
+    for (const h of this.save.houses) drawHouse(g, h.gx, h.gy, this.workers.some((w) => w.inside && w.data.home === h.id), t, h.rot);
+    // une maison sans eau : une goutte dessinée (pas un emoji) posée sur le toit, dont l'opacité oscille entre 90 et 100 %
+    for (const h of this.save.houses) {
+      if (!houseThirsty(h) || !this.workers.some((w) => w.data.home === h.id)) continue;
+      const a = 0.85 + 0.15 * Math.sin(t / 110);
+      const angry = this.workers.some((w) => w.data.home === h.id && (w.data.discontent ?? 0) >= 50);
+      const cx = (h.gx + 1) * C - (angry ? 22 : 0); // à côté du visage s'il y en a un
+      const cy = (h.gy + 1) * C + 4;
+      const r = 12;
+      g.beginPath();
+      g.moveTo(cx, cy - r * 2.1);
+      g.bezierCurveTo(cx + r * 0.3, cy - r * 1.3, cx + r, cy - r * 0.6, cx + r, cy);
+      g.arc(cx, cy, r, 0, Math.PI, false);
+      g.bezierCurveTo(cx - r, cy - r * 0.6, cx - r * 0.3, cy - r * 1.3, cx, cy - r * 2.1);
+      g.closePath();
+      g.fillStyle = `rgba(47,150,240,${a})`;
+      g.fill();
+      g.strokeStyle = `rgba(16,84,160,${a})`;
+      g.lineWidth = 2.5;
+      g.lineJoin = "round";
+      g.stroke();
+      g.fillStyle = `rgba(255,255,255,${a * 0.75})`;
+      g.beginPath();
+      g.ellipse(cx - r * 0.38, cy - r * 0.15, r * 0.2, r * 0.38, 0.35, 0, Math.PI * 2);
+      g.fill();
+    }
+    // quarantaine : un panneau sur la maison
+    for (const h of this.save.houses) {
+      if (!h.quarantine) continue;
+      g.font = "34px sans-serif";
+      g.textAlign = "center";
+      g.textBaseline = "middle";
+      g.fillText("🚧", (h.gx + 1.5) * C, (h.gy + 1.55) * C);
+      g.textBaseline = "alphabetic";
+    }
+    // un habitant malade : une croix verte sur le toit (à gauche, pour ne pas cacher la goutte ni la mine renfrognée)
+    for (const h of this.save.houses) {
+      const sick = this.workers.filter((w) => w.data.home === h.id && w.data.illness);
+      if (!sick.length) continue;
+      const bad = sick.some((w) => (w.data.illness?.sev ?? 0) >= SICK_BED);
+      const a = 0.88 + 0.12 * Math.sin(t / 150);
+      const cx = (h.gx + 0.55) * C;
+      const cy = (h.gy + 0.6) * C;
+      g.fillStyle = `rgba(255,255,255,${a})`;
+      g.beginPath();
+      g.arc(cx, cy, 15, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = bad ? `rgba(200,50,50,${a})` : `rgba(62,130,87,${a})`;
+      g.lineWidth = 3;
+      g.stroke();
+      g.fillStyle = bad ? "#c83232" : "#3e8257";
+      g.fillRect(cx - 3.5, cy - 9, 7, 18);
+      g.fillRect(cx - 9, cy - 3.5, 18, 7);
+    }
+    // des habitants mécontents : une mine renfrognée, au centre du toit comme la goutte (qui se pousse sur le côté s'il y en a une)
+    for (const h of this.save.houses) {
+      if (!this.workers.some((w) => w.data.home === h.id && (w.data.discontent ?? 0) >= 50)) continue;
+      const thirsty = houseThirsty(h);
+      g.font = "36px sans-serif";
+      g.textAlign = "center";
+      g.textBaseline = "middle";
+      g.fillText("😠", (h.gx + 1) * C + (thirsty ? 22 : 0), (h.gy + 1) * C + 2);
+      g.textBaseline = "alphabetic";
+    }
+    for (const k of this.save.sites) drawSite(g, k.kind, k.gx, k.gy, k.have, k.need, k.progress, t, k.rot, !!k.undo, k.mat === "plank");
+    // un dépôt plein : une pastille rouge sur le toit
+    for (const d of this.save.depots) {
+      if (depotFree(d) > 0) continue;
+      const a = 0.85 + 0.15 * Math.sin(t / 130);
+      const cx = (d.gx + 1.5) * C;
+      const cy = (d.gy + 1.1) * C;
+      g.fillStyle = `rgba(214,57,48,${a})`;
+      g.beginPath();
+      g.arc(cx, cy, 20, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = `rgba(255,255,255,${a})`;
+      g.lineWidth = 3;
+      g.stroke();
+      g.fillStyle = "#fff";
+      g.font = "bold 26px sans-serif";
+      g.textAlign = "center";
+      g.textBaseline = "middle";
+      g.fillText("!", cx, cy + 1);
+      g.textBaseline = "alphabetic";
+    }
+    this.drawEntrances(g, t);
+    if (z >= 0.3) for (const a of this.animals) a.draw(g, view);
+    this.drawCrew(g, t);
+    this.terrain.drawTrees(g, view, z, felledFn, (idx) => isPicked(this.save, idx), (idx) => isBerryGone(this.save, idx));
+    this.drawSeason(g, view, t);
+    this.drawNight(g, view, t);
+    this.drawSelections(g);
+    this.drawSplashes(g, t);
+    if (this.build.open && selDef && hoverCell) this.drawGhost(g, selDef.kind, hoverCell, selDef.cost);
+  }
+
+  // La saison en cours, d'après l'horloge de jeu.
+  private season() {
+    return seasonAt(this.save.clock);
+  }
+
+  // Les saisons : une teinte sur le monde (qui glisse vers celle de la saison suivante à la fin), de la neige qui blanchit l'herbe
+  // à l'approche de l'hiver, et des particules qui tombent : pétales, feuilles mortes, flocons.
+  private drawSeason(g: CanvasRenderingContext2D, view: { x0: number; y0: number; x1: number; y1: number }, t: number) {
+    const se = this.season();
+    const smooth = (x: number) => x * x * (3 - 2 * x);
+    const blend = smooth(Math.max(0, Math.min(1, (se.prog - 0.75) / 0.25)));
+    const c = se.rules.tint.map((v, i) => v + (se.next.tint[i] - v) * blend);
+    const w = view.x1 - view.x0;
+    const h = view.y1 - view.y0;
+    if (c[0] < 254 || c[1] < 254 || c[2] < 254) {
+      g.save();
+      g.globalCompositeOperation = "multiply";
+      g.fillStyle = `rgb(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])})`;
+      g.fillRect(view.x0 - C, view.y0 - C, w + 2 * C, h + 2 * C);
+      g.restore();
+    }
+    // neige au sol : elle arrive à la fin de l'automne, et fond à la fin de l'hiver
+    const snow = se.rules.id === "winter" ? 1 - blend : se.rules.id === "autumn" ? blend : 0;
+    if (snow > 0.01) {
+      g.save();
+      g.globalCompositeOperation = "screen";
+      g.fillStyle = `rgba(232,240,255,${0.4 * snow})`;
+      g.fillRect(view.x0 - C, view.y0 - C, w + 2 * C, h + 2 * C);
+      g.restore();
+    }
+    // particules : pétales (printemps), feuilles (automne), flocons (hiver et fin d'automne)
+    const kind = snow > 0.3 ? "snow" : se.rules.id === "autumn" ? "leaf" : null;
+    if (!kind) return;
+    const z = this.cam.zoom;
+    const count = kind === "snow" ? 90 : 45;
+    const speed = kind === "snow" ? 0.1 : kind === "leaf" ? 0.07 : 0.05; // vues par seconde
+    g.save();
+    for (let i = 0; i < count; i++) {
+      const rx = (Math.sin(i * 12.9898) * 43758.5453) % 1;
+      const ry = (Math.sin(i * 78.233) * 12345.6789) % 1;
+      const px = (rx + 1) % 1;
+      const py = (ry + 1) % 1;
+      const fall = (py + (t / 1000) * speed * (0.7 + (i % 5) * 0.12)) % 1;
+      const sway = Math.sin(t / 600 + i) * (kind === "snow" ? 0.012 : 0.03);
+      const x = view.x0 + (((px + sway + (kind === "leaf" ? fall * 0.15 : 0)) % 1) + 1) % 1 * w;
+      const y = view.y0 + fall * h;
+      const size = (kind === "snow" ? 2.6 + (i % 3) : 4.5) / z;
+      g.globalAlpha = kind === "snow" ? 0.85 : 0.9;
+      if (kind === "snow") {
+        g.fillStyle = "#ffffff";
+        g.beginPath();
+        g.arc(x, y, size, 0, Math.PI * 2);
+        g.fill();
+      } else {
+        g.fillStyle = ["#d9822b", "#b5502a", "#e0a63a", "#9a6a2a"][i % 4];
+        g.beginPath();
+        g.ellipse(x, y, size * 1.5, size * 0.8, t / 400 + i, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+    g.restore();
+  }
+
+  // La nuit : un voile bleu sombre sur tout le monde (rosé à l'aube et au crépuscule), puis des lueurs chaudes aux fenêtres
+  // des maisons habitées, aux feux des camps et aux fenêtres des usines qui tournent.
+  private drawNight(g: CanvasRenderingContext2D, view: { x0: number; y0: number; x1: number; y1: number }, t: number) {
+    const d = darkness(clockHour(this.save.clock));
+    if (d < 0.01) return;
+    const warm = Math.min(d, 1 - d) * 2; // 1 au milieu de l'aube ou du crépuscule
+    const rr = 255 - (255 - 78) * d;
+    const gg = 255 - (255 - 92) * d - 22 * warm;
+    const bb = 255 - (255 - 150) * d - 45 * warm;
+    g.save();
+    g.globalCompositeOperation = "multiply";
+    g.fillStyle = `rgb(${Math.round(rr)},${Math.round(gg)},${Math.round(bb)})`;
+    g.fillRect(view.x0 - C, view.y0 - C, view.x1 - view.x0 + 2 * C, view.y1 - view.y0 + 2 * C);
+    g.restore();
+    if (d < 0.2) return;
+    // lueurs : de la lumière ajoutée, d'autant plus visible qu'il fait noir
+    g.save();
+    g.globalCompositeOperation = "lighter";
+    const glow = (cx: number, cy: number, radius: number, power: number, seed: number, rgb = "255,185,90") => {
+      if (cx < view.x0 - radius || cx > view.x1 + radius || cy < view.y0 - radius || cy > view.y1 + radius) return;
+      const flick = 0.88 + 0.12 * Math.sin(t / 140 + seed * 1.7) * Math.sin(t / 97 + seed);
+      const a = power * d * flick;
+      const grad = g.createRadialGradient(cx, cy, 0, cx, cy, radius);
+      grad.addColorStop(0, `rgba(${rgb},${a})`);
+      grad.addColorStop(0.45, `rgba(${rgb},${a * 0.45})`);
+      grad.addColorStop(1, `rgba(${rgb},0)`);
+      g.fillStyle = grad;
+      g.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+    };
+    const s = this.save;
+    for (const h of s.houses) if (this.workers.some((w) => w.data.home === h.id)) glow((h.gx + 1) * C, (h.gy + 1) * C, 2.3 * C, 0.5, h.id);
+    for (const c of s.camps) glow((c.gx + 0.7) * C, (c.gy + 0.9) * C, 2.1 * C, 0.65, c.id + 20, "255,150,60");
+    for (const m of s.lodges) glow((m.gx + 0.7) * C, (m.gy + 0.9) * C, 2 * C, 0.5, m.id + 40, "255,150,60");
+    for (const m of s.sawmills) if (sawmillWorking(m) && this.staffAt("sawmill", m.id) > 0) glow((m.gx + 1.5) * C, (m.gy + 1.5) * C, 2.6 * C, 0.4, m.id + 60);
+    for (const m of s.butchers) if (butcherWorking(m) && this.staffAt("butcher", m.id) > 0) glow((m.gx + 1.5) * C, (m.gy + 1.5) * C, 2.6 * C, 0.4, m.id + 80);
+    for (const m of s.depots) glow((m.gx + 1.5) * C, (m.gy + 1.5) * C, 1.8 * C, 0.25, m.id + 100);
+    for (const m of s.ports) glow((m.gx + 1.5) * C, (m.gy + 1.5) * C, 2.4 * C, 0.4, m.id + 120, "255,215,130");
+    g.restore();
+  }
+
+  // Aperçu de la structure qu'on s'apprête à poser, rouge si c'est impossible.
+  private drawGhost(g: CanvasRenderingContext2D, kind: "camp" | "depot" | "road" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church", at: Pos, cost: number) {
+    const s = this.save;
+    const size = kind === "camp" || kind === "house" || kind === "well" || kind === "lodge" || kind === "apiary" || kind === "clinic" ? 2 : kind === "depot" || kind === "sawmill" || kind === "butcher" || kind === "port" || kind === "church" ? 3 : 1;
+    const affordable = s.coins >= cost;
+    const ok = affordable && (kind === "camp" ? canPlaceCamp(s, at.gx, at.gy, this.buildRot) : kind === "depot" ? canPlaceDepot(s, at.gx, at.gy, this.buildRot) : kind === "house" ? canPlaceHouse(s, at.gx, at.gy, this.buildRot) : kind === "sawmill" ? canPlaceSawmill(s, at.gx, at.gy, this.buildRot) : kind === "well" ? canPlaceWell(s, at.gx, at.gy, this.buildRot) : kind === "lodge" ? canPlaceLodge(s, at.gx, at.gy, this.buildRot) : kind === "butcher" ? canPlaceButcher(s, at.gx, at.gy, this.buildRot) : kind === "port" ? canPlacePort(s, at.gx, at.gy) : kind === "apiary" ? canPlaceApiary(s, at.gx, at.gy, this.buildRot) : kind === "clinic" ? canPlaceClinic(s, at.gx, at.gy, this.buildRot) : kind === "church" ? canPlaceChurch(s, at.gx, at.gy, this.buildRot) : canPlaceRoad(s, at.gx, at.gy));
+    this.drawNuisanceGhost(g, kind, at, size);
+    g.globalAlpha = 0.65;
+    if (kind === "camp") drawCamp(g, at.gx, at.gy, this.buildRot);
+    else if (kind === "depot") drawDepot(g, at.gx, at.gy, this.buildRot);
+    else if (kind === "house") drawHouse(g, at.gx, at.gy, false, 0, this.buildRot);
+    else if (kind === "sawmill") drawSawmill(g, at.gx, at.gy, false, 0, this.buildRot);
+    else if (kind === "well") drawWell(g, at.gx, at.gy, this.buildRot);
+    else if (kind === "lodge") drawLodge(g, at.gx, at.gy, this.buildRot);
+    else if (kind === "butcher") drawButcher(g, at.gx, at.gy, false, 0, this.buildRot);
+    else if (kind === "port") drawPort(g, at.gx, at.gy, Math.max(0, portRot(s, at.gx, at.gy)));
+    else if (kind === "apiary") drawApiary(g, at.gx, at.gy, false, 0, this.buildRot);
+    else if (kind === "clinic") drawClinic(g, at.gx, at.gy, this.buildRot);
+    else if (kind === "church") drawChurch(g, at.gx, at.gy, this.buildRot);
+    else drawRoadCell(g, at.gx, at.gy);
+    g.globalAlpha = 1;
+    if (!ok) {
+      g.fillStyle = "rgba(230,40,40,0.3)";
+      g.fillRect(at.gx * C, at.gy * C, size * C, size * C);
+    }
+    // où sera l'entrée : c'est là qu'il faudra amener un chemin
+    if (kind !== "road") {
+      const spot = { gx: at.gx, gy: at.gy, rot: this.buildRot };
+      const e = kind === "camp" ? campEntrance(spot) : kind === "house" ? houseEntrance(spot) : kind === "sawmill" ? sawmillEntrance(spot) : kind === "well" ? wellEntrance(spot) : kind === "lodge" ? lodgeEntrance(spot) : kind === "butcher" ? butcherEntrance(spot) : kind === "port" ? portEntrance({ ...spot, rot: Math.max(0, portRot(s, at.gx, at.gy)) }) : kind === "apiary" ? apiaryEntrance(spot) : kind === "clinic" ? clinicEntrance(spot) : kind === "church" ? churchEntrance(spot) : depotEntrance(spot);
+      drawEntrance(g, e.gx, e.gy, roadAt(s, e.gx, e.gy), performance.now(), this.buildRot);
+    }
+  }
+
+  // Cercle pointillé : jusqu'où ce bâtiment dérange. Les maisons concernées sont cerclées de rouge avec la gêne qu'elles subiraient.
+  // Pour une maison qu'on envisage de poser, on montre son contentement d'après les nuisances alentour.
+  private drawNuisanceGhost(g: CanvasRenderingContext2D, kind: string, at: Pos, size: number) {
+    const s = this.save;
+    const key: NuisanceKey | null = kind === "apiary" || kind === "sawmill" || kind === "port" || kind === "lodge" ? kind : null;
+    const ring = (cx: number, cy: number, radius: number) => {
+      g.save();
+      g.beginPath();
+      g.arc(cx * C, cy * C, radius * C, 0, Math.PI * 2);
+      g.fillStyle = "rgba(220,60,60,0.07)";
+      g.fill();
+      g.strokeStyle = "rgba(220,60,60,0.65)";
+      g.lineWidth = 3;
+      g.setLineDash([10, 9]);
+      g.lineDashOffset = -performance.now() / 60;
+      g.stroke();
+      g.restore();
+    };
+    const tag = (text: string, x: number, y: number, color: string) => {
+      g.save();
+      g.font = "bold 20px 'Trebuchet MS', sans-serif";
+      g.textAlign = "center";
+      g.lineWidth = 5;
+      g.strokeStyle = "#4a3b2a";
+      g.fillStyle = color;
+      g.strokeText(text, x, y);
+      g.fillText(text, x, y);
+      g.restore();
+    };
+    if (key) {
+      const cx = at.gx + size / 2;
+      const cy = at.gy + size / 2;
+      const n = MOOD.nuisance[key];
+      ring(cx, cy, n.radius);
+      for (const h of housesNear(s, cx, cy, n.radius)) {
+        const pen = nuisancePen(key, Math.hypot(h.gx + 1 - cx, h.gy + 1 - cy));
+        g.save();
+        g.strokeStyle = "rgba(220,60,60,0.9)";
+        g.lineWidth = 4;
+        g.strokeRect(h.gx * C - 3, h.gy * C - 3, 2 * C + 6, 2 * C + 6);
+        g.restore();
+        if (pen > 0) tag(`−${pen}`, (h.gx + 1) * C, h.gy * C - 8, "#ffb3a8");
+      }
+    } else if (kind === "house") {
+      for (const src of nuisanceSources(s)) ring(src.x, src.y, MOOD.nuisance[src.key].radius);
+      const m = moodAt(s, at.gx + 1, at.gy + 1);
+      tag(`${m.mood < MOOD.grumpyBelow ? "😠" : m.mood < 75 ? "😐" : "😊"} ${m.mood} %`, (at.gx + 1) * C, at.gy * C - 10, m.mood < MOOD.grumpyBelow ? "#ffb3a8" : m.mood < 75 ? "#ffe9a0" : "#c8f2b0");
+    }
+  }
+
+  private drawCrew(g: CanvasRenderingContext2D, t: number) {
+    const dest = this.selected?.destination;
+    if (dest) {
+      const pulse = 0.5 + 0.5 * Math.sin(t / 180);
+      g.strokeStyle = `rgba(255,255,255,${0.6 + 0.4 * pulse})`;
+      g.lineWidth = 3;
+      g.beginPath();
+      g.arc(dest[0] * C, dest[1] * C, C * (0.2 + 0.08 * pulse), 0, Math.PI * 2);
+      g.stroke();
+    }
+    for (const w of [...this.workers].filter((o) => !o.inside && !o.crafting).sort((a, b) => a.y - b.y)) w.draw(g, w === this.selected, t);
+    for (const l of this.leavers) {
+      g.globalAlpha = l.t < 5 ? 1 : Math.max(0, 1 - (l.t - 5) / 4); // il s'efface dans le lointain
+      l.w.draw(g, false, t);
+      g.globalAlpha = 1;
+    }
+  }
+
+  // Repères d'entrée : visibles en construction et pour le camp ou le dépôt sélectionné.
+  private drawEntrances(g: CanvasRenderingContext2D, t: number) {
+    const s = this.save;
+    const show = (e: Pos, rot = 0) => drawEntrance(g, e.gx, e.gy, roadAt(s, e.gx, e.gy), t, rot);
+    if (this.build.open) {
+      for (const c of s.camps) show(campEntrance(c), c.rot);
+      for (const d of s.depots) show(depotEntrance(d), d.rot);
+      for (const k of s.sites) show(siteEntrance(k), k.rot);
+      for (const h of s.houses) show(houseEntrance(h), h.rot);
+      for (const m of s.sawmills) show(sawmillEntrance(m), m.rot);
+      for (const m of s.wells) show(wellEntrance(m), m.rot);
+      for (const m of s.lodges) show(lodgeEntrance(m), m.rot);
+      for (const m of s.butchers) show(butcherEntrance(m), m.rot);
+      for (const m of s.ports) show(portEntrance(m), m.rot);
+      for (const m of s.apiaries) show(apiaryEntrance(m), m.rot);
+      for (const m of s.clinics) show(clinicEntrance(m), m.rot);
+      for (const m of s.churches) show(churchEntrance(m), m.rot);
+    } else {
+      if (this.apiarySel) show(apiaryEntrance(this.apiarySel), this.apiarySel.rot);
+      if (this.clinicSel) show(clinicEntrance(this.clinicSel), this.clinicSel.rot);
+      if (this.churchSel) show(churchEntrance(this.churchSel), this.churchSel.rot);
+      if (this.portSel) show(portEntrance(this.portSel), this.portSel.rot);
+      if (this.butcherSel) show(butcherEntrance(this.butcherSel), this.butcherSel.rot);
+      if (this.lodgeSel) show(lodgeEntrance(this.lodgeSel), this.lodgeSel.rot);
+      if (this.wellSel) show(wellEntrance(this.wellSel), this.wellSel.rot);
+      if (this.sawmillSel) show(sawmillEntrance(this.sawmillSel), this.sawmillSel.rot);
+      if (this.houseSel) show(houseEntrance(this.houseSel), this.houseSel.rot);
+      if (this.siteSel) show(siteEntrance(this.siteSel), this.siteSel.rot);
+      if (this.campSel) show(campEntrance(this.campSel), this.campSel.rot);
+      if (this.depotSel) show(depotEntrance(this.depotSel), this.depotSel.rot);
+    }
+  }
+
+  // Cadres de sélection et zone en cours de tracé.
+  private drawSelections(g: CanvasRenderingContext2D) {
+    const outline = () => {
+      g.fillStyle = "rgba(255,214,64,0.1)";
+      g.fill();
+      g.strokeStyle = "rgba(255,200,40,0.95)";
+      g.lineWidth = 3;
+      g.setLineDash([14, 10]);
+      g.lineDashOffset = -performance.now() / 45; // les tirets défilent doucement
+      g.stroke();
+      g.setLineDash([]);
+      g.lineDashOffset = 0;
+    };
+    if (this.depotSel) {
+      g.beginPath();
+      g.rect(this.depotSel.gx * C - 4, this.depotSel.gy * C - 4, 3 * C + 8, 3 * C + 8);
+      outline();
+    }
+    if (this.apiarySel) {
+      g.beginPath();
+      g.rect(this.apiarySel.gx * C - 4, this.apiarySel.gy * C - 4, 2 * C + 8, 2 * C + 8);
+      outline();
+      this.drawNuisanceGhost(g, "apiary", this.apiarySel, 2);
+    }
+    if (this.churchSel) {
+      g.beginPath();
+      g.rect(this.churchSel.gx * C - 4, this.churchSel.gy * C - 4, 3 * C + 8, 3 * C + 8);
+      outline();
+    }
+    if (this.clinicSel) {
+      g.beginPath();
+      g.rect(this.clinicSel.gx * C - 4, this.clinicSel.gy * C - 4, 2 * C + 8, 2 * C + 8);
+      outline();
+    }
+    if (this.sawmillSel) this.drawNuisanceGhost(g, "sawmill", this.sawmillSel, 3);
+    if (this.portSel) this.drawNuisanceGhost(g, "port", this.portSel, 3);
+    if (this.lodgeSel) this.drawNuisanceGhost(g, "lodge", this.lodgeSel, 2);
+    if (this.portSel) {
+      g.beginPath();
+      g.rect(this.portSel.gx * C - 4, this.portSel.gy * C - 4, 3 * C + 8, 3 * C + 8);
+      outline();
+    }
+    if (this.butcherSel) {
+      g.beginPath();
+      g.rect(this.butcherSel.gx * C - 4, this.butcherSel.gy * C - 4, 3 * C + 8, 3 * C + 8);
+      outline();
+    }
+    if (this.lodgeSel) {
+      g.beginPath();
+      g.rect(this.lodgeSel.gx * C - 4, this.lodgeSel.gy * C - 4, 2 * C + 8, 2 * C + 8);
+      outline();
+    }
+    if (this.wellSel) {
+      g.beginPath();
+      g.rect(this.wellSel.gx * C - 4, this.wellSel.gy * C - 4, 2 * C + 8, 2 * C + 8);
+      outline();
+    }
+    if (this.sawmillSel) {
+      g.beginPath();
+      g.rect(this.sawmillSel.gx * C - 4, this.sawmillSel.gy * C - 4, 3 * C + 8, 3 * C + 8);
+      outline();
+    }
+    if (this.houseSel) {
+      g.beginPath();
+      g.rect(this.houseSel.gx * C - 4, this.houseSel.gy * C - 4, 2 * C + 8, 2 * C + 8);
+      outline();
+    }
+    if (this.siteSel) {
+      const n = siteSize(this.siteSel.kind);
+      g.beginPath();
+      g.rect(this.siteSel.gx * C - 4, this.siteSel.gy * C - 4, n * C + 8, n * C + 8);
+      outline();
+    }
+    if (this.campSel) {
+      g.beginPath();
+      g.rect(this.campSel.gx * C - 4, this.campSel.gy * C - 4, 2 * C + 8, 2 * C + 8);
+      outline();
+    }
+    // zone en cours de tracé (clic droit maintenu) : les arbres qui seront coupés sont cerclés
+    const d = this.zoneDrag;
+    if (d && Math.hypot(d.x1 - d.x0, d.y1 - d.y0) * this.cam.zoom > 10) this.drawZonePreview(g, d, outline);
+  }
+
+  private drawZonePreview(g: CanvasRenderingContext2D, d: { x0: number; y0: number; x1: number; y1: number }, outline: () => void) {
+    const pre: Zone = { kind: "rect", x0: d.x0 / C, y0: d.y0 / C, x1: d.x1 / C, y1: d.y1 / C };
+    const now = Date.now();
+    const trees = this.terrain.treesIn(pre, (idx) => isFelled(this.save, idx, now));
+    g.beginPath();
+    g.rect(Math.min(d.x0, d.x1), Math.min(d.y0, d.y1), Math.abs(d.x1 - d.x0), Math.abs(d.y1 - d.y0));
+    outline();
+    g.strokeStyle = "rgba(255,214,64,0.95)";
+    g.lineWidth = 2.5;
+    for (const idx of trees) {
+      const o = objects[idx];
+      g.beginPath();
+      g.arc(o.x * C, o.y * C, 0.42 * C * o.size, 0, Math.PI * 2);
+      g.stroke();
+    }
+    const label = trees.length ? `${trees.length} arbre${trees.length > 1 ? "s" : ""} · relâche pour valider` : "aucun arbre dans cette zone";
+    g.font = "bold 17px 'Trebuchet MS', sans-serif";
+    g.textAlign = "center";
+    g.lineWidth = 5;
+    g.strokeStyle = "#4a3b2a";
+    g.fillStyle = "#fff6e0";
+    const ly = d.y1 - 0.6 * C;
+    g.strokeText(label, d.x1, ly);
+    g.fillText(label, d.x1, ly);
+  }
+
+  // Cercles qui s'élargissent là où l'on vient de jeter la ligne.
+  private drawSplashes(g: CanvasRenderingContext2D, t: number) {
+    this.splashes = this.splashes.filter((s) => t - s.t0 < 900);
+    g.strokeStyle = "#fff";
+    for (const s of this.splashes) {
+      const k = (t - s.t0) / 900;
+      g.globalAlpha = 1 - k;
+      g.lineWidth = 3 * (1 - k) + 1;
+      g.beginPath();
+      g.arc(s.x, s.y, 8 + k * 34, 0, Math.PI * 2);
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+  }
+
+  private drawMinimap() {
+    const el = document.getElementById("minimap") as HTMLCanvasElement;
+    const g = el.getContext("2d")!;
+    g.clearRect(0, 0, MINI, MINI);
+    g.drawImage(this.mini, 0, 0);
+    const k = MINI / (GRID * C);
+    // camps (orange) et dépôts (brun)
+    for (const c of this.save.camps) {
+      g.fillStyle = "#e8923a";
+      g.fillRect((c.gx * C + C) * k - 2.5, (c.gy * C + C) * k - 2.5, 5, 5);
+    }
+    for (const m of this.save.apiaries) {
+      g.fillStyle = "#e6b84a";
+      g.fillRect((m.gx * C + C) * k - 2.5, (m.gy * C + C) * k - 2.5, 5, 5);
+    }
+    for (const m of this.save.churches) {
+      g.fillStyle = "#8d8a99";
+      g.fillRect((m.gx * C + 1.5 * C) * k - 3, (m.gy * C + 1.5 * C) * k - 3, 6, 6);
+    }
+    for (const m of this.save.clinics) {
+      g.fillStyle = "#4f9a6a";
+      g.fillRect((m.gx * C + C) * k - 2.5, (m.gy * C + C) * k - 2.5, 5, 5);
+    }
+    for (const m of this.save.ports) {
+      g.fillStyle = "#4f78a8";
+      g.fillRect((m.gx * C + 1.5 * C) * k - 3, (m.gy * C + 1.5 * C) * k - 3, 6, 6);
+    }
+    for (const m of this.save.butchers) {
+      g.fillStyle = "#d9d2c2";
+      g.fillRect((m.gx * C + 1.5 * C) * k - 3, (m.gy * C + 1.5 * C) * k - 3, 6, 6);
+    }
+    for (const m of this.save.lodges) {
+      g.fillStyle = "#b5443a";
+      g.fillRect((m.gx * C + C) * k - 2.5, (m.gy * C + C) * k - 2.5, 5, 5);
+    }
+    for (const m of this.save.wells) {
+      g.fillStyle = "#3b8fd9";
+      g.fillRect((m.gx * C + C) * k - 2.5, (m.gy * C + C) * k - 2.5, 5, 5);
+    }
+    for (const m of this.save.sawmills) {
+      g.fillStyle = "#b58a4a";
+      g.fillRect((m.gx * C + 1.5 * C) * k - 3, (m.gy * C + 1.5 * C) * k - 3, 6, 6);
+    }
+    for (const h of this.save.houses) {
+      g.fillStyle = "#c4513c";
+      g.fillRect((h.gx * C + C) * k - 2.5, (h.gy * C + C) * k - 2.5, 5, 5);
+    }
+    for (const d of this.save.depots) {
+      g.fillStyle = "#7a4e2a";
+      g.fillRect((d.gx * C + 1.5 * C) * k - 3, (d.gy * C + 1.5 * C) * k - 3, 6, 6);
+    }
+    const hw = this.w / 2 / this.cam.zoom;
+    const hh = this.h / 2 / this.cam.zoom;
+    g.strokeStyle = "#fff";
+    g.lineWidth = 2;
+    g.strokeRect((this.cam.x - hw) * k, (this.cam.y - hh) * k, hw * 2 * k, hh * 2 * k);
+  }
+
+  // ---------- infobulle et menus ----------
+
+  // Ce que l'on peut faire sous le curseur : abattre, pêcher, construire…
+  private showCellInfo(cell: Pos | null, w: { x: number; y: number } | null, felled: (idx: number) => boolean) {
+    const el = document.getElementById("cellInfo") as HTMLElement;
+    if (!cell || !w) {
+      el.style.display = "none";
+      return;
+    }
+    const s = this.save;
+    const text = siteAt(s, cell.gx, cell.gy)?.undo
+      ? "démontage en cours"
+      : siteAt(s, cell.gx, cell.gy)
+        ? "chantier"
+        : houseAt(s, cell.gx, cell.gy)
+          ? "maison"
+          : sawmillAt(s, cell.gx, cell.gy)
+            ? "scierie"
+            : wellAt(s, cell.gx, cell.gy)
+              ? "puits"
+              : lodgeAt(s, cell.gx, cell.gy)
+                ? "camp de chasseur"
+                : butcherAt(s, cell.gx, cell.gy)
+                  ? "boucherie"
+                  : portAt(s, cell.gx, cell.gy)
+                    ? "port"
+                    : churchAt(s, cell.gx, cell.gy)
+                      ? "église"
+                    : clinicAt(s, cell.gx, cell.gy)
+                      ? "maison du soigneur"
+                    : apiaryAt(s, cell.gx, cell.gy)
+                      ? "rucher"
+          : campAt(s, cell.gx, cell.gy)
+            ? "camp de bûcheron"
+            : depotAt(s, cell.gx, cell.gy)
+              ? "dépôt"
+              : "";
+    if (!text) {
+      el.style.display = "none"; // ni herbe, ni eau, ni arbre : rien à dire
+      return;
+    }
+    el.textContent = text;
+    el.className = "";
+    el.style.display = "block";
+  }
+
+  // Menu de la structure sélectionnée. Camp : stock, limite et liaison. Dépôt : stock, liaison, et recrutement d'un porteur.
+  private updateStructureMenu() {
+    const box = document.getElementById("campMenu") as HTMLElement;
+    const camp = this.campSel && this.save.camps.includes(this.campSel) ? this.campSel : null;
+    const depot = this.depotSel && this.save.depots.includes(this.depotSel) ? this.depotSel : null;
+    const site = this.siteSel && this.save.sites.includes(this.siteSel) ? this.siteSel : null;
+    if (!camp) this.campSel = null;
+    if (!depot) this.depotSel = null;
+    if (!site) this.siteSel = null;
+    const house = this.houseSel && this.save.houses.includes(this.houseSel) ? this.houseSel : null;
+    if (!house) this.houseSel = null;
+    const mill = this.sawmillSel && this.save.sawmills.includes(this.sawmillSel) ? this.sawmillSel : null;
+    if (!mill) this.sawmillSel = null;
+    const well = this.wellSel && this.save.wells.includes(this.wellSel) ? this.wellSel : null;
+    if (!well) this.wellSel = null;
+    const lodge = this.lodgeSel && this.save.lodges.includes(this.lodgeSel) ? this.lodgeSel : null;
+    if (!lodge) this.lodgeSel = null;
+    const shop = this.butcherSel && this.save.butchers.includes(this.butcherSel) ? this.butcherSel : null;
+    if (!shop) this.butcherSel = null;
+    const port = this.portSel && this.save.ports.includes(this.portSel) ? this.portSel : null;
+    if (!port) this.portSel = null;
+    const church = this.churchSel && this.save.churches.includes(this.churchSel) ? this.churchSel : null;
+    if (!church) this.churchSel = null;
+    const clinic = this.clinicSel && this.save.clinics.includes(this.clinicSel) ? this.clinicSel : null;
+    if (!clinic) this.clinicSel = null;
+    const apiary = this.apiarySel && this.save.apiaries.includes(this.apiarySel) ? this.apiarySel : null;
+    if (!apiary) this.apiarySel = null;
+    if (!camp && !depot && !site && !house && !mill && !well && !lodge && !shop && !port && !apiary && !clinic && !church) {
+      if (!this.selected) {
+        this.hideMenu(box);
+        this.menuSig = "";
+      }
+      return;
+    }
+    const crew = this.workers.map((w) => w.name + w.role + (w.working ? 1 : 0)).join(",");
+    const net = `${Object.keys(this.save.roads).length}/${this.save.camps.length}/${this.save.depots.length}/${this.save.houses.length}`;
+    const sickKey = this.workers.filter((w) => w.data.illness).map((w) => w.data.id + w.data.illness!.kind + Math.round(w.data.illness!.sev / 5)).join(",");
+    const sig = church ? `e${church.id}/${church.graves.length}/${this.save.corpses.length}/${net}/${crew}` : clinic ? `n${clinic.id}/${clinic.prevent === false ? 0 : 1}/${this.workers.map((w) => healSkill(w.data.xp ?? 0).level).join("")}/${clinic.berries}/${clinic.honey}/${clinic.tisane}/${clinic.syrup}/${sickKey}/${net}/${crew}` : apiary ? `a${apiary.id}/${apiary.honey}/${Math.floor(apiary.care / 5)}/${this.season().index}/${net}/${crew}` : port ? `p${port.id}/${port.planks}/${port.cuts}/${port.honey}/${port.berries}/${port.quotaBerries}/${port.quotaPlanks}-${port.quotaCuts}-${port.quotaHoney}/${Math.floor(port.t / 4)}/${net}/${crew}` : shop ? `b${shop.id}/${shop.meat}/${shop.cuts}/${net}/${crew}` : lodge ? `l${lodge.id}/${lodge.meat}/${crew}/${Math.floor(this.animals.length / 5)}` : well ? `w${well.id}/${well.water}/${net}/${crew}` : mill ? `m${mill.id}/${mill.logs}/${mill.planks}/${net}/${crew}` : house ? `h${house.id}/${house.quarantine ? 1 : 0}/${sickKey}/${house.water ?? 0}/${house.food ?? 0}/${houseMood(this.save, house).mood}/${Math.round(Math.max(0, ...this.workers.filter((w) => w.data.home === house.id).map((w) => w.data.discontent ?? 0)) / 4)}/${this.workers.filter((w) => w.data.home === house.id && w.data.threat !== undefined).length}/${Math.floor(Math.max(0, ...this.workers.filter((w) => w.data.threat !== undefined).map((w) => w.data.threat ?? 0)) / 5)}/${crew}/${this.workers.map((w) => (w.inside ? 1 : 0) + "" + w.data.home).join("")}` : camp ? `c${camp.id}/${camp.wood}/${net}` : site ? `s${site.id}/${site.have}/${Math.floor(site.progress * 20)}/${net}/${crew}` : `d${depot!.id}/${depot!.wood}/${depot!.planks ?? 0}/${depot!.cuts ?? 0}/${depot!.honey ?? 0}/${depot!.berries ?? 0}/${depot!.level ?? 1}/${net}/${crew}`;
+    const crewAt: [string, number] | null = church ? ["church", church.id] : clinic ? ["clinic", clinic.id] : apiary ? ["apiary", apiary.id] : port ? ["port", port.id] : shop ? ["butcher", shop.id] : lodge ? ["lodge", lodge.id] : well ? ["well", well.id] : mill ? ["sawmill", mill.id] : site ? ["site", site.id] : camp ? ["camp", camp.id] : depot ? ["depot", depot.id] : null;
+    const work = crewAt && crewAt[0] !== "well" ? `${this.employeesAt(crewAt[0] as WorkplaceKind, crewAt[1]).map((w) => w.data.id).join(",")}${crewAt[0] === "depot" ? "+" + this.employeesAt("gather", crewAt[1]).map((w) => w.data.id).join(",") : ""}|${this.recruitOpen ? this.workers.filter((o) => !o.data.workplace).map((o) => o.data.id).join(",") : "-"}` : "";
+    const full = sig + "/" + work + "/" + ((church ?? clinic ?? apiary ?? port ?? shop ?? lodge ?? well ?? mill ?? house ?? camp ?? site ?? depot)?.rot ?? 0);
+    if (full !== this.menuSig) {
+      this.menuSig = full;
+      box.textContent = "";
+      const div = (cls: string, text?: string) => {
+        const d = document.createElement("div");
+        d.className = cls;
+        if (text !== undefined) d.textContent = text;
+        return d;
+      };
+      const span = (cls: string, text: string) => {
+        const s = document.createElement("span");
+        s.className = cls;
+        s.textContent = text;
+        return s;
+      };
+      // en-tête : un gros pictogramme, le nom, et des puces d'état (vert : bon, rouge : à régler, gris : en attente)
+      type Chip = [string, "ok" | "bad" | "idle"];
+      const head = (emoji: string, title: string, chips: Chip[] = [], aside: Node | string = "") => {
+        const h = div("mHead");
+        h.append(span("mEmoji", emoji), span("mTitle", title));
+        if (aside) {
+          const a = span("mAside", "");
+          a.append(aside); // à droite, sur la même ligne
+          h.appendChild(a);
+        }
+        box.appendChild(h);
+        if (chips.length) {
+          const row = div("mChips");
+          for (const [text, kind] of chips) row.appendChild(span(`mChip ${kind}`, text));
+          box.appendChild(row);
+        }
+      };
+      const bar = (value: number, max: number) => {
+        const b = div("menuBar");
+        const fill = document.createElement("i");
+        fill.style.width = `${Math.round((Math.min(value, max) / max) * 100)}%`;
+        fill.className = value >= max ? "full" : "";
+        b.appendChild(fill);
+        box.appendChild(b);
+      };
+      // une ligne chiffrée, avec ou sans jauge
+      const stat = (label: string, value: string, gauge?: [number, number]) => {
+        const row = div("mStat");
+        row.append(span("", label), span("mVal", value));
+        box.appendChild(row);
+        if (gauge) bar(gauge[0], gauge[1]);
+      };
+      const hasRoad = (e: Pos) => roadAt(this.save, e.gx, e.gy);
+      const linkChip = (label: string, e: Pos, targets: Pos[]): Chip => (hasRoad(e) && targets.some((t) => this.linkedTo(e, [t])) ? [`Relié · ${label}`, "ok"] : [`Non relié · ${label}`, "bad"]);
+      const folksOf = (pred: (w: Worker) => boolean) => this.workers.filter(pred).length;
+
+      if (church) {
+        const waiting = this.save.corpses.length;
+        head("⛪", "Église", [
+          linkChip("maisons", churchEntrance(church), this.save.houses.map(houseEntrance)),
+          church.graves.length >= CHURCH_GRAVES ? ["Cimetière plein", "bad"] : waiting ? [`${waiting} défunt${waiting > 1 ? "s" : ""} à enterrer`, "bad"] : ["Tout est en ordre", "ok"],
+        ]);
+        stat("⚰️ Tombes", `${church.graves.length} / ${CHURCH_GRAVES}`, [church.graves.length, CHURCH_GRAVES]);
+        stat("🕯️ Défunts en attente", String(waiting));
+        for (const gr of church.graves.slice(-6).reverse()) stat(`✝ ${gr.name}`, `${gr.age} ans · ${gr.cause}`);
+      } else if (clinic) {
+        const sickList = this.workers.filter((w) => w.data.illness);
+        head("🩺", "Maison du soigneur", [
+          sickList.length ? [`${sickList.length} malade${sickList.length > 1 ? "s" : ""}`, "bad"] : ["Tout le monde va bien", "ok"],
+        ]);
+        stat("🫐 Baies", `${clinic.berries} / ${CLINIC_BERRY_CAP}`, [clinic.berries, CLINIC_BERRY_CAP]);
+        stat("🍯 Miel", `${clinic.honey} / ${CLINIC_HONEY_CAP}`, [clinic.honey, CLINIC_HONEY_CAP]);
+        stat(`${REMEDIES.tisane.emoji} Tisanes`, `${clinic.tisane} / ${CLINIC_REMEDY_CAP}`, [clinic.tisane, CLINIC_REMEDY_CAP]);
+        stat(`${REMEDIES.syrup.emoji} Sirops`, `${clinic.syrup} / ${CLINIC_REMEDY_CAP}`, [clinic.syrup, CLINIC_REMEDY_CAP]);
+        for (const w of sickList) {
+          const il = w.data.illness!;
+          stat(`${ILLNESSES[il.kind].emoji} ${w.name}`, `${ILLNESSES[il.kind].label} · ${Math.round(il.sev)} %`, [il.sev, 100]);
+        }
+      } else if (apiary) {
+        const honeyNow = this.season().rules.honey;
+        head("🐝", "Rucher", [
+          honeyNow === 0 ? ["Abeilles endormies", "idle"] : apiary.care <= 0 ? ["À l'abandon", "bad"] : apiary.care < TEND_BELOW ? ["À soigner", "bad"] : apiary.honey >= HONEY_CAP ? ["Plein", "bad"] : ["Butinent", "ok"],
+        ]);
+        stat("🍯 Miel", `${apiary.honey} / ${HONEY_CAP}`, [apiary.honey, HONEY_CAP]);
+        stat("😠 Maisons gênées", String(housesNear(this.save, apiary.gx + 1, apiary.gy + 1, MOOD.nuisance.apiary.radius).length));
+        // le soin baisse tout seul : la jauge se remplit quand il faut s'en occuper (rouge quand les ruches sont à l'abandon)
+        stat("🧑‍🌾 Soin à apporter", `${Math.round(100 - apiary.care)} %`, [100 - apiary.care, 100]);
+      } else if (port) {
+        const e = portEntrance(port);
+        const f = port.t / SHIP_CYCLE;
+        const secs = (frac: number) => Math.max(0, Math.round((((frac - f) % 1) + 1) % 1 * SHIP_CYCLE));
+        head("⚓", "Port", [
+          f >= SHIP_ARRIVE - 0.02 && f < SHIP_DOCKED ? ["Bateau en approche", "ok"] : f >= SHIP_DOCKED && f < SHIP_DEPART ? ["Chargement", "ok"] : ["Bateau au large", "idle"],
+          linkChip("dépôts", e, this.save.depots.map(depotEntrance)),
+        ]);
+        stat("😠 Maisons gênées", String(housesNear(this.save, port.gx + 1.5, port.gy + 1.5, MOOD.nuisance.port.radius).length));
+        stat("⏱ Départ du bateau", f >= SHIP_DOCKED && f < SHIP_DEPART ? `${secs(SHIP_DEPART)} s` : `${secs(SHIP_DEPART)} s`);
+        const wanted = port.quotaPlanks + port.quotaCuts + port.quotaHoney + port.quotaBerries;
+        const waiting = port.planks + port.cuts + port.honey + port.berries;
+        if (wanted > 0) stat("📦 Au quai", `${waiting} / ${wanted}`, [waiting, wanted]);
+        stat("💰 Gain maximum par bateau", `${port.quotaPlanks * PRICE_PLANK + port.quotaCuts * PRICE_CUTS + port.quotaHoney * PRICE_HONEY + port.quotaBerries * PRICE_BERRIES} 🪙`);
+        // combien exporter par bateau, marchandise par marchandise (0 : on n'exporte pas) ; Maj + clic : de 5 en 5
+        const stepper = (label: string, price: number, stock: number, value: number, set: (v: number) => void) => {
+          const row = div("mStep");
+          const ctl = div("mCtl");
+          const btn = (text: string, delta: number) => {
+            const b = document.createElement("button");
+            b.className = "round mStepBtn";
+            b.textContent = text;
+            b.addEventListener("click", (ev) => {
+              set(Math.max(0, Math.min(PORT_CAP, value + delta * (ev.shiftKey ? 5 : 1))));
+              persist(this.save);
+              this.menuSig = "";
+            });
+            return b;
+          };
+          ctl.append(btn("−", -1), span("mStepVal", String(value)), btn("+", 1));
+          row.append(span("mStepLabel", label), ctl);
+          box.appendChild(row);
+          box.appendChild(div("menuRow tiny", value > 0 ? `par bateau · ${price} 🪙 la pièce · ${stock} au quai` : "pas d'export"));
+        };
+        stepper("🪚 Planches", PRICE_PLANK, port.planks, port.quotaPlanks, (v) => (port.quotaPlanks = v));
+        stepper("🥩 Viande préparée", PRICE_CUTS, port.cuts, port.quotaCuts, (v) => (port.quotaCuts = v));
+        stepper("🍯 Miel", PRICE_HONEY, port.honey, port.quotaHoney, (v) => (port.quotaHoney = v));
+        stepper("🫐 Baies", PRICE_BERRIES, port.berries, port.quotaBerries, (v) => (port.quotaBerries = v));
+      } else if (shop) {
+        const e = butcherEntrance(shop);
+        head("🥩", "Boucherie", [
+          this.staffAt("butcher", shop.id) === 0 ? ["Sans ouvrier", "bad"] : butcherWorking(shop) ? ["En marche", "ok"] : shop.cuts >= BUTCHER_CUTS_CAP ? ["Stock plein", "bad"] : ["En attente", "idle"],
+          linkChip("chasseurs", e, this.save.lodges.map(lodgeEntrance)),
+        ]);
+        stat("🍖 Viande à préparer", `${shop.meat} / ${BUTCHER_MEAT_CAP}`, [shop.meat, BUTCHER_MEAT_CAP]);
+        stat("🥩 Viande préparée", `${shop.cuts} / ${BUTCHER_CUTS_CAP}`, [shop.cuts, BUTCHER_CUTS_CAP]);
+      } else if (lodge) {
+        const e = lodgeEntrance(lodge);
+        const around = this.animals.filter((a) => Math.hypot(a.x - (e.gx + 0.5), a.y - (e.gy + 0.5)) <= HUNT_RADIUS).length;
+        head("🏹", "Camp de chasseur", [around ? ["Gibier à portée", "ok"] : ["Pas de gibier", "idle"], lodge.meat >= LODGE_CAP ? ["Plein", "bad"] : ["Place libre", "idle"]]);
+        stat("🍖 Viande", `${lodge.meat} / ${LODGE_CAP}`, [lodge.meat, LODGE_CAP]);
+        stat("Gibier alentour", String(around));
+        stat("😠 Maisons gênées", String(housesNear(this.save, lodge.gx + 1, lodge.gy + 1, MOOD.nuisance.lodge.radius).length));
+        stat("Chasseurs", String(folksOf((w) => w.data.job?.type === "hunt" && w.data.job.lodgeId === lodge.id)));
+      } else if (well) {
+        const e = wellEntrance(well);
+        head("⛲", "Puits", [linkChip("maisons", e, this.save.houses.map(houseEntrance))]);
+        stat("💧 Eau", `${well.water} / ${WELL_CAP}`, [well.water, WELL_CAP]);
+      } else if (mill) {
+        const e = sawmillEntrance(mill);
+        head("🏭", "Scierie", [
+          this.staffAt("sawmill", mill.id) === 0 ? ["Sans ouvrier", "bad"] : sawmillWorking(mill) ? ["En marche", "ok"] : mill.planks >= SAWMILL_PLANKS_CAP ? ["Stock plein", "bad"] : ["En attente", "idle"],
+          linkChip("camps", e, this.save.camps.map(campEntrance)),
+        ]);
+        stat("🪵 Bûches", `${mill.logs} / ${SAWMILL_LOGS_CAP}`, [mill.logs, SAWMILL_LOGS_CAP]);
+        stat("😠 Maisons gênées", String(housesNear(this.save, mill.gx + 1.5, mill.gy + 1.5, MOOD.nuisance.sawmill.radius).length));
+        stat("🪚 Planches", `${mill.planks} / ${SAWMILL_PLANKS_CAP}`, [mill.planks, SAWMILL_PLANKS_CAP]);
+      } else if (house) {
+        const folks = this.workers.filter((w) => w.data.home === house.id);
+        const mood = houseMood(this.save, house);
+        head("🏠", "Maison", [
+          ...folks.filter((w) => w.data.illness).map((w): Chip => [`${ILLNESSES[w.data.illness!.kind].emoji} ${w.name} · ${ILLNESSES[w.data.illness!.kind].label} ${Math.round(w.data.illness!.sev)} %`, w.data.illness!.sev >= SICK_BED ? "bad" : "idle"]),
+          ...folks.filter((w) => w.data.threat !== undefined).map((w): Chip => [`💢 ${w.name} menace de partir · ${Math.max(0, Math.round(w.data.threat ?? 0))} s`, "bad"]),
+          ...mood.causes.slice(0, 3).map((c): Chip => [`${c.emoji} ${c.label} −${c.pen}`, "bad"]),
+        ], (() => {
+          // les habitants : un clic sélectionne le villageois et la caméra le suit
+          const who = document.createDocumentFragment();
+          if (!folks.length) who.append("Personne");
+          folks.forEach((w, i) => {
+            if (i) who.append(" · ");
+            const b = document.createElement("button");
+            b.className = "mWhoBtn";
+            b.textContent = w.name;
+            b.addEventListener("click", () => {
+              this.selectWorker(w);
+              this.follow = true;
+              this.menuSig = "";
+            });
+            who.appendChild(b);
+          });
+          return who;
+        })());
+        const worst = Math.round(Math.max(0, ...folks.map((w) => w.data.discontent ?? 0))); // le plus mécontent des habitants
+        stat("😠 Mécontentement", `${worst} %`, [worst, 100]);
+        // sous chaque réserve : une mention discrète de celui qui est parti en chercher (ils y vont seuls)
+        const supply = (food: boolean, label: string, value: number, cap: number) => {
+          stat(label, `${value} / ${cap}`);
+          const away = folks.filter((w) => w.data.job?.type === "water" && !!w.data.job.food === food);
+          if (away.length) box.appendChild(div("menuRow tiny", `${away.map((w) => w.name).join(" et ")} ${away.length > 1 ? "sont partis" : "est parti"} chercher ${food ? "à manger" : "de l'eau"}…`));
+          bar(value, cap);
+        };
+        supply(true, "🥩 Nourriture", house.food ?? 0, HOUSE_FOOD_CAP);
+        supply(false, "💧 Eau", house.water ?? 0, HOUSE_WATER_CAP);
+        for (const w of folks.filter((o) => o.inside)) {
+          const b = document.createElement("button");
+          b.className = "round menuItem";
+          b.textContent = `↩ Faire sortir ${w.name}`;
+          b.addEventListener("click", () => this.leaveHome(w, house));
+          box.appendChild(b);
+        }
+      } else if (site) {
+        const names: Record<string, [string, string]> = {
+          camp: ["🏕️", "camp de bûcheron"],
+          house: ["🏠", "maison"],
+          sawmill: ["🏭", "scierie"],
+          well: ["⛲", "puits"],
+          lodge: ["🏹", "camp de chasseur"],
+          butcher: ["🥩", "boucherie"],
+          port: ["⚓", "port"],
+          apiary: ["🐝", "rucher"],
+          clinic: ["🩺", "maison du soigneur"],
+          church: ["⛪", "église"],
+          depot: ["📦", "dépôt"],
+        };
+        const [emoji, name] = names[site.kind];
+        const chips: Chip[] = [];
+        if (site.need > 0 && !siteReady(site)) chips.push(this.buildRoute(site.id, false).ok ? ["Relié · matériaux", "ok"] : ["Non relié · matériaux", "bad"]);
+        chips.push(siteReady(site) ? ["Prêt à construire", "ok"] : ["Fondations", "idle"]);
+        head(emoji, `Chantier · ${name}`, chips);
+        if (site.need > 0) stat(site.mat === "plank" ? "🪚 Planches livrées" : "🪵 Bois livré", `${site.have} / ${site.need}`, [site.have, site.need]);
+        stat("🔨 Construction", `${Math.floor(site.progress * 100)} %`, [site.progress, 1]);
+        stat("Bâtisseurs", String(folksOf((w) => w.data.job?.type === "build" && w.data.job.siteId === site.id)));
+      } else if (camp) {
+        head("🏕️", "Camp de bûcheron", [linkChip("scierie", campEntrance(camp), this.save.sawmills.map(sawmillEntrance)), camp.wood >= CAMP_CAPACITY ? ["Plein", "bad"] : ["Place libre", "idle"]]);
+        stat("🪵 Bois", `${camp.wood} / ${CAMP_CAPACITY}`, [camp.wood, CAMP_CAPACITY]);
+        stat("Bûcherons", String(folksOf((w) => w.role === "wood" && w.working)));
+      } else if (depot) {
+        const planks = depot.planks ?? 0;
+        const cuts = (depot.cuts ?? 0) + (depot.honey ?? 0) + (depot.berries ?? 0); // places prises par la viande préparée, le miel et les baies
+        const e = depotEntrance(depot);
+        head("📦", "Dépôt", [linkChip("usines", e, [...this.save.sawmills.map(sawmillEntrance), ...this.save.butchers.map(butcherEntrance)]), planks + cuts >= depotCapacity(depot) ? ["Plein", "bad"] : ["Place libre", "idle"], [`Niveau ${depotLevel(depot)}`, "idle"]]);
+        stat("Places", `${planks + cuts} / ${depotCapacity(depot)}`, [planks + cuts, depotCapacity(depot)]);
+        stat("🪚 Planches", String(planks));
+        stat("🥩 Viande préparée", String(depot.cuts ?? 0));
+        stat("🍯 Miel", String(depot.honey ?? 0));
+        stat("🫐 Baies", String(depot.berries ?? 0));
+      }
+      // les employés de ce bâtiment : on les voit, on peut les virer, et recruter parmi les villageois sans emploi
+      const crewList = (kind: WorkplaceKind, id: number) => {
+        const emp = this.employeesAt(kind, id);
+        const slots = JOBS[kind].slots;
+        const sec = div("mCrew");
+        sec.appendChild(div("mCrewTitle", `${JOBS[kind].label}s · ${emp.length} / ${slots}`));
+        if (!emp.length) sec.appendChild(div("mNone", "Personne"));
+        const emojis: Record<string, string> = { none: "🧑‍🌾", wood: "🪓", haul: "📦", build: "🔨", water: "💧", hunt: "🏹", bee: "🐝", craft: "🛠️" };
+        for (const w of emp) {
+          const row = div("mWork");
+          const who = div("mWho");
+          const act = span("mAct", w.activity);
+          act.dataset.wid = String(w.data.id);
+          who.append(span("mWhoName", `${emojis[w.role] ?? "🧑‍🌾"} ${w.name} · ${JOBS[kind].label}${kind === "clinic" ? " · " + healSkill(w.data.xp ?? 0).label : ""}`), act);
+          const fire = document.createElement("button");
+          fire.className = "round mFire";
+          fire.textContent = "Virer";
+          fire.title = "Il perd son emploi et redevient disponible";
+          fire.addEventListener("click", () => {
+            this.fire(w);
+            this.menuSig = "";
+          });
+          row.append(who, fire);
+          sec.appendChild(row);
+        }
+        // recruter
+        const full = emp.length >= slots;
+        const rb = document.createElement("button");
+        rb.className = "round menuItem";
+        rb.textContent = full ? "Tous les postes sont pris" : this.recruitOpen ? "➕ Recruter ▴" : "➕ Recruter ▾";
+        rb.disabled = full;
+        rb.addEventListener("click", () => {
+          this.recruitOpen = !this.recruitOpen;
+          this.menuSig = "";
+        });
+        sec.appendChild(rb);
+        if (this.recruitOpen && !full) {
+          const list = div("jobList");
+          const free = this.workers.filter((o) => !o.data.workplace);
+          if (!free.length) list.appendChild(div("mNone", "Aucun villageois sans emploi"));
+          for (const o of free) {
+            const row = div("mWork");
+            const who = div("mWho");
+            who.append(span("mWhoName", `🧑‍🌾 ${o.name}`), span("mAct", `Sans emploi · fatigue ${Math.round(100 - o.energy)} %`));
+            const hireBtn = document.createElement("button");
+            hireBtn.className = "round mFire";
+            hireBtn.textContent = "Embaucher";
+            hireBtn.addEventListener("click", () => {
+              if (this.hire(o, kind, id)) this.recruitOpen = false;
+              this.menuSig = "";
+            });
+            row.append(who, hireBtn);
+            list.appendChild(row);
+          }
+          sec.appendChild(list);
+        }
+        box.appendChild(sec);
+      };
+      if (church) crewList("church", church.id);
+      else if (clinic) crewList("clinic", clinic.id);
+      else if (apiary) crewList("apiary", apiary.id);
+      else if (port) crewList("port", port.id);
+      else if (shop) crewList("butcher", shop.id);
+      else if (lodge) crewList("lodge", lodge.id);
+      else if (mill) crewList("sawmill", mill.id);
+      else if (site) crewList("site", site.id);
+      else if (camp) crewList("camp", camp.id);
+      else if (depot) {
+        crewList("depot", depot.id);
+        crewList("gather", depot.id);
+      }
+      this.addMenuActions(box, (church ?? clinic ?? apiary ?? port ?? shop ?? lodge ?? well ?? mill ?? house ?? camp ?? site ?? depot)!);
+    }
+    // ce que chacun fait se met à jour en place, sans refaire le menu
+    box.querySelectorAll<HTMLElement>(".mAct").forEach((el) => {
+      const w = this.workers.find((k) => String(k.data.id) === el.dataset.wid);
+      if (!w) return;
+      const txt = w.activity;
+      if (el.textContent !== txt) el.textContent = txt;
+      el.classList.toggle("idle", txt.startsWith("Rien à faire"));
+    });
+    const cue: Cue | "sawIdle" | "sawWork" | "butcherWork" | "siteIdle" = church
+      ? "bell"
+      : clinic || apiary
+      ? "bee"
+      : port
+        ? "bell"
+        : shop
+          ? butcherWorking(shop) && this.staffAt("butcher", shop.id) > 0 ? "butcherWork" : "eat"
+          : lodge
+            ? "hunt"
+            : well
+              ? "water"
+              : mill
+                ? sawmillWorking(mill) && this.staffAt("sawmill", mill.id) > 0 ? "sawWork" : "sawIdle"
+                : house
+                  ? this.workers.some((w) => w.inside && w.data.home === house.id) ? "rest" : "door"
+                  : camp
+                    ? camp.wood > 0 ? "wood" : "idle"
+                    : site
+                      ? site.progress > 0 ? "hammer" : "siteIdle"
+                      : "carry"; // un dépôt : des charges qu'on pose
+    this.showMenu(box, full.split("/")[0], cue);
+    // le menu reste toujours en haut à droite de l'écran (voir #campMenu) : il ne cache aucun bâtiment alentour
+  }
+
+  // Le menu entre en glissant depuis la droite (et ses lignes une à une) ; il rejoue cette entrée quand on passe à un autre bâtiment.
+  private showMenu(box: HTMLElement, key: string, cue?: Cue | "sawIdle" | "sawWork" | "butcherWork" | "siteIdle") {
+    clearTimeout(this.menuHideT);
+    const wasHidden = box.style.display !== "flex" || box.classList.contains("out");
+    box.classList.remove("out");
+    box.style.display = "flex";
+    if (wasHidden || key !== this.menuKey) {
+      if (cue) play(cue); // un son qui correspond à ce que fait le villageois ou le bâtiment
+      if (this.menuKey !== "") this.recruitOpen = false; // un autre bâtiment : la liste de recrutement se referme
+      this.menuKey = key;
+      box.classList.remove("in");
+      void box.offsetWidth;
+      box.classList.add("in");
+      clearTimeout(this.menuInT);
+      this.menuInT = window.setTimeout(() => box.classList.remove("in"), 900); // ensuite les mises à jour du menu ne rejouent pas l'animation
+    }
+  }
+
+  // ...et sort en glissant vers la droite.
+  private hideMenu(box: HTMLElement) {
+    if (box.style.display === "none" || box.classList.contains("out")) return;
+    clearTimeout(this.menuInT);
+    box.classList.remove("in");
+    box.classList.add("out");
+    this.menuKey = "";
+    this.recruitOpen = false;
+    this.menuHideT = window.setTimeout(() => {
+      box.style.display = "none";
+      box.classList.remove("out");
+    }, 170);
+  }
+
+  // Le tableau des villageois : le jeu se met en pause pendant qu'il est ouvert.
+  private openFolk() {
+    this.paused = true;
+    this.renderFolk();
+    (document.getElementById("folkModal") as HTMLElement).hidden = false;
+  }
+
+  private closeFolk() {
+    this.paused = false;
+    this.lastT = performance.now(); // pas de saut de temps à la reprise
+    (document.getElementById("folkModal") as HTMLElement).hidden = true;
+  }
+
+  private renderFolk() {
+    const s = this.save;
+    const body = document.getElementById("folkBody") as HTMLElement;
+    const sub = document.getElementById("folkSub") as HTMLElement;
+    const sick = this.workers.filter((w) => w.data.illness).length;
+    const jobless = this.workers.filter((w) => !w.data.workplace).length;
+    sub.textContent = `${this.workers.length} villageois · ${s.houses.length * HOUSE_CAPACITY} places en maison · ${sick} malade${sick > 1 ? "s" : ""} · ${jobless} sans emploi`;
+    type Row = { w: Worker; name: string; age: number; job: string; state: string; health: string; hv: number; tired: number; thirst: number; hunger: number; mood: number; home: string };
+    const rows: Row[] = this.workers.map((w) => {
+      const il = w.data.illness;
+      return {
+        w,
+        name: w.name,
+        age: Math.floor(w.data.age ?? 25),
+        job: w.data.workplace ? JOBS[w.data.workplace.kind].label : "Sans emploi",
+        state: w.activity,
+        health: il ? `${ILLNESSES[il.kind].emoji} ${ILLNESSES[il.kind].label} ${Math.round(il.sev)} %` : (w.data.protect ?? 0) > 0 ? "🛡️ Protégé" : "En forme",
+        hv: il ? il.sev : -1,
+        tired: Math.round(100 - w.energy),
+        thirst: Math.round(w.data.thirst ?? 0),
+        hunger: Math.round(w.data.hunger ?? 0),
+        mood: Math.round(w.data.discontent ?? 0),
+        home: w.data.home != null ? "Oui" : "Sans maison",
+      };
+    });
+    const { key, dir } = this.folkSort;
+    const sortVal = (r: Row): number | string => (key === "health" ? r.hv : (r as unknown as Record<string, number | string>)[key]);
+    rows.sort((a, b) => {
+      const x = sortVal(a);
+      const y = sortVal(b);
+      return (typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), "fr")) * dir;
+    });
+    const cols: [string, string][] = [["name", "Prénom"], ["age", "Âge"], ["job", "Emploi"], ["state", "Activité"], ["health", "Santé"], ["tired", "Fatigue"], ["thirst", "Soif"], ["hunger", "Faim"], ["mood", "Colère"], ["home", "Maison"]];
+    const table = document.createElement("table");
+    const head = table.createTHead().insertRow();
+    for (const [k, label] of cols) {
+      const th = document.createElement("th");
+      th.textContent = label + (k === key ? (dir === 1 ? " ▲" : " ▼") : "");
+      th.addEventListener("click", () => {
+        this.folkSort = { key: k, dir: k === key ? (dir === 1 ? -1 : 1) : 1 };
+        this.renderFolk();
+      });
+      head.appendChild(th);
+    }
+    const tbody = table.createTBody();
+    const meter = (td: HTMLElement, pct: number) => {
+      const m = document.createElement("span");
+      m.className = "meter";
+      const i = document.createElement("i");
+      i.style.width = `${Math.min(100, pct)}%`;
+      if (pct >= 75) i.className = "full";
+      m.appendChild(i);
+      td.append(m, `${pct} %`);
+    };
+    for (const r of rows) {
+      const tr = tbody.insertRow();
+      if (r.w.data.illness) tr.className = "sick";
+      tr.addEventListener("click", () => {
+        this.closeFolk();
+        this.selectWorker(r.w);
+        this.follow = true; // la caméra va le chercher
+      });
+      const tdName = tr.insertCell();
+      const dot = document.createElement("span");
+      dot.className = "dot";
+      dot.style.background = CREW_COLORS[r.w.data.color % CREW_COLORS.length];
+      tdName.append(dot, r.name);
+      tr.insertCell().textContent = `${r.age} ans${r.age >= AGE_ELDER ? " 🧓" : ""}`;
+      tr.insertCell().textContent = r.job;
+      tr.insertCell().textContent = r.state;
+      const th = tr.insertCell();
+      th.textContent = r.health;
+      th.className = r.hv >= 0 ? "bad" : "good";
+      meter(tr.insertCell(), r.tired);
+      meter(tr.insertCell(), r.thirst);
+      meter(tr.insertCell(), r.hunger);
+      meter(tr.insertCell(), r.mood);
+      const tdHome = tr.insertCell();
+      tdHome.textContent = r.home;
+      if (r.home !== "Oui") tdHome.className = "bad";
+    }
+    body.textContent = "";
+    body.appendChild(table);
+  }
+
+  // Menu du villageois sélectionné (même place que celui des bâtiments : en haut à droite) : son métier, sa fatigue, de quoi le mettre au repos.
+  private updateWorkerMenu() {
+    const w = this.selected;
+    const box = document.getElementById("campMenu") as HTMLElement;
+    if (!w || this.campSel || this.depotSel || this.siteSel || this.houseSel || this.sawmillSel || this.wellSel || this.lodgeSel || this.butcherSel || this.clinicSel || this.portSel || this.apiarySel) return;
+    const job = w.data.job ?? w.data.resume?.job ?? null;
+    const role = w.data.job ? w.role : w.data.resume?.role ?? w.role;
+    const jobs: Record<string, string> = { none: "Villageois", wood: "Bûcheron", haul: "Porteur", build: "Bâtisseur", water: "Corvée", hunt: "Chasseur", bee: "Apiculteur", gather: "Cueilleur", heal: "Soigneur", bury: "Fossoyeur" };
+    let metier = w.data.workplace ? JOBS[w.data.workplace.kind].label : jobs[role] ?? "Villageois"; // son métier est celui de son emploi
+    if (role === "water" && job?.type === "water") metier = job.food ? "Corvée de vivres" : "Corvée d'eau";
+    const emojis: Record<string, string> = { none: "🧑‍🌾", wood: "🪓", haul: "📦", build: "🔨", water: "💧", hunt: "🏹", bee: "🐝", craft: "🛠️", gather: "🫐", heal: "🩺", bury: "⛪" };
+    const tired = Math.round(100 - w.energy);
+    const state = w.data.visit ? (w.inside ? "Boit et mange" : "Rentre boire ou manger") : w.inside ? (w.resting ? "Se repose" : w.fem ? "Chez elle" : "Chez lui") : w.resting ? "Rentre se reposer" : w.moving ? "En route" : w.working ? "Au travail" : "Disponible";
+    const sv = this.save;
+    const sig = `v${w.name}|${Math.floor(w.data.age ?? 25)}|${role}|${metier}|${healSkill(w.data.xp ?? 0).level}${Math.floor((w.data.xp ?? 0) / 2)}|${Math.ceil((w.data.protect ?? 0) / 30)}|${w.data.illness ? w.data.illness.kind + Math.round(w.data.illness.sev / 4) : "-"}|${w.data.workplace ? w.data.workplace.kind + w.data.workplace.id : "-"}|${Math.round(tired / 4)}|${Math.round((w.data.thirst ?? 0) / 4)}|${Math.round((w.data.hunger ?? 0) / 4)}|${Math.round((w.data.discontent ?? 0) / 4)}|${w.data.threat !== undefined ? Math.round((w.data.threat ?? 0) / 3) : "-"}|${state}|${w.data.carry}|${w.data.home ?? "-"}|${w.working ? 1 : 0}|${this.jobMenuOpen}|${sv.depots.length}${sv.sawmills.length}${sv.butchers.length}${sv.lodges.length}${sv.apiaries.length}${sv.sites.length}`;
+    // ce que fait le villageois : son clic sonne comme son activité
+    const cue: Cue =
+      (w.data.discontent ?? 0) >= 50
+        ? "angry"
+        : w.data.visit
+          ? "eat"
+          : w.inside || w.resting
+            ? "rest"
+            : w.data.job?.type === "water"
+              ? "water"
+              : w.role === "build"
+                ? "hammer"
+                : w.role === "craft"
+                  ? "saw"
+                  : w.role === "wood" && w.working
+                    ? "wood"
+                    : w.role === "hunt"
+                      ? "hunt"
+                      : w.role === "bee"
+                        ? "bee"
+                        : w.data.carry > 0
+                          ? "carry"
+                          : w.moving
+                            ? "walk"
+                            : "idle";
+    this.showMenu(box, "v" + w.name, cue);
+    if (sig === this.menuSig) return;
+    this.menuSig = sig;
+    box.textContent = "";
+    const div = (cls: string, text?: string) => {
+      const d = document.createElement("div");
+      d.className = cls;
+      if (text !== undefined) d.textContent = text;
+      return d;
+    };
+    const span = (cls: string, text: string) => {
+      const s = document.createElement("span");
+      s.className = cls;
+      s.textContent = text;
+      return s;
+    };
+    const h = div("mHead");
+    h.append(span("mEmoji", emojis[role] ?? "🧑‍🌾"), span("mTitle", w.name), span("mAge", `${Math.floor(w.data.age ?? 25)} ans`), span("mAside", metier)); // son métier, à droite du prénom
+    box.appendChild(h);
+    const chips = div("mChips");
+    if (w.data.illness) chips.appendChild(span(`mChip ${w.data.illness.sev >= SICK_BED ? "bad" : "idle"}`, `${ILLNESSES[w.data.illness.kind].emoji} ${ILLNESSES[w.data.illness.kind].label}`));
+    chips.appendChild(span(`mChip ${tired >= 75 ? "bad" : w.working || w.moving ? "ok" : "idle"}`, tired >= 75 ? "Épuisé" : state));
+    box.appendChild(chips);
+    const stat = (label: string, value: string) => {
+      const row = div("mStat");
+      row.append(span("", label), span("mVal", value));
+      box.appendChild(row);
+    };
+    stat("Fatigue", `${tired} %`);
+    const b = div("menuBar");
+    const fill = document.createElement("i");
+    fill.style.width = `${tired}%`;
+    fill.className = tired >= 75 ? "full" : "";
+    b.appendChild(fill);
+    box.appendChild(b);
+    if ((w.data.age ?? 25) >= AGE_ELDER) stat("🧓 Grand âge", w.fem ? "âgée" : "âgé");
+    const meter = (label: string, pct: number) => {
+      stat(label, `${pct} %`);
+      const mb = div("menuBar");
+      const mf = document.createElement("i");
+      mf.style.width = `${pct}%`;
+      mf.className = pct >= 75 ? "full" : "";
+      mb.appendChild(mf);
+      box.appendChild(mb);
+    };
+    meter("💧 Soif", Math.round(w.data.thirst ?? 0));
+    meter("🥩 Faim", Math.round(w.data.hunger ?? 0));
+    if ((w.data.protect ?? 0) > 0) stat("🛡️ Protégé", `${Math.ceil((w.data.protect ?? 0) / 60)} min`);
+    if (w.role === "heal" || (w.data.xp ?? 0) > 0) {
+      const sk = healSkill(w.data.xp ?? 0);
+      stat("🩺 Expérience", `${sk.label} · ${Math.floor(w.data.xp ?? 0)}${sk.to ? ` / ${sk.to}` : ""}`);
+      if (sk.to) {
+        const xb = div("menuBar");
+        const xf = document.createElement("i");
+        xf.style.width = `${Math.min(100, (((w.data.xp ?? 0) - sk.from) / (sk.to - sk.from)) * 100)}%`;
+        xb.appendChild(xf);
+        box.appendChild(xb);
+      }
+    }
+    if (w.data.illness) meter(`${ILLNESSES[w.data.illness.kind].emoji} ${ILLNESSES[w.data.illness.kind].label}`, Math.round(w.data.illness.sev));
+    const unrest = Math.round(w.data.discontent ?? 0);
+    stat("😠 Mécontentement", `${unrest} %`);
+    const ub = div("menuBar");
+    const uf = document.createElement("i");
+    uf.style.width = `${unrest}%`;
+    uf.className = unrest >= 75 ? "full" : "";
+    ub.appendChild(uf);
+    box.appendChild(ub);
+    if (w.data.threat !== undefined) stat("💢 Menace de partir", `${Math.max(0, Math.round(w.data.threat))} s`);
+    if (w.data.carry > 0) stat("Porte", `${w.data.carry} ${w.data.cargo === "plank" ? "🪚" : w.data.cargo === "water" ? "💧" : w.data.cargo === "meat" ? "🍖" : w.data.cargo === "cuts" ? "🥩" : w.data.cargo === "honey" ? "🍯" : w.data.cargo === "berries" ? "🫐" : "🪵"}`);
+    // changer de travail : la liste des travaux possibles, d'après ce qui existe au village
+    const change = document.createElement("button");
+    change.className = "round menuItem";
+    change.textContent = this.jobMenuOpen ? "🔁 Changer d'emploi ▴" : "🔁 Changer d'emploi ▾";
+    change.addEventListener("click", () => {
+      this.jobMenuOpen = !this.jobMenuOpen;
+      this.menuSig = "";
+    });
+    box.appendChild(change);
+    if (this.jobMenuOpen) {
+      const list = div("jobList");
+      const pick = (label: string, fn: () => void) => {
+        const b = document.createElement("button");
+        b.className = "round menuItem jobOpt";
+        b.textContent = label;
+        b.addEventListener("click", () => {
+          fn();
+          this.jobMenuOpen = false;
+          this.menuSig = "";
+        });
+        list.appendChild(b);
+      };
+      // les postes encore libres, d'après les bâtiments qui existent
+      const places: { kind: WorkplaceKind; id: number; emoji: string; name: string }[] = [
+        ...sv.camps.map((m) => ({ kind: "camp" as const, id: m.id, emoji: "🪓", name: "camp de bûcheron" })),
+        ...sv.lodges.map((m) => ({ kind: "lodge" as const, id: m.id, emoji: "🏹", name: "camp de chasseur" })),
+        ...sv.apiaries.map((m) => ({ kind: "apiary" as const, id: m.id, emoji: "🐝", name: "rucher" })),
+        ...sv.clinics.map((m) => ({ kind: "clinic" as const, id: m.id, emoji: "🩺", name: "maison du soigneur" })),
+        ...sv.churches.map((m) => ({ kind: "church" as const, id: m.id, emoji: "⛪", name: "église" })),
+        ...sv.sites.filter((t) => !t.undo).map((m) => ({ kind: "site" as const, id: m.id, emoji: "🔨", name: "chantier" })),
+        ...sv.depots.map((m) => ({ kind: "depot" as const, id: m.id, emoji: "📦", name: "dépôt" })),
+        ...sv.depots.map((m) => ({ kind: "gather" as const, id: m.id, emoji: "🫐", name: "dépôt (cueillette)" })),
+        ...sv.ports.map((m) => ({ kind: "port" as const, id: m.id, emoji: "⚓", name: "port" })),
+        ...sv.sawmills.map((m) => ({ kind: "sawmill" as const, id: m.id, emoji: "🏭", name: "scierie" })),
+        ...sv.butchers.map((m) => ({ kind: "butcher" as const, id: m.id, emoji: "🥩", name: "boucherie" })),
+      ];
+      let any = false;
+      for (const p of places) {
+        const here = w.data.workplace?.kind === p.kind && w.data.workplace.id === p.id;
+        if (here || this.employeesAt(p.kind, p.id).length >= JOBS[p.kind].slots) continue;
+        any = true;
+        const same = places.filter((q) => q.kind === p.kind);
+        pick(`${p.emoji} ${JOBS[p.kind].label} · ${p.name}${same.length > 1 ? " " + (same.indexOf(p) + 1) : ""}`, () => this.hire(w, p.kind, p.id));
+      }
+      if (!any) list.appendChild(div("mNone", "Aucun poste libre"));
+      if (w.data.workplace) pick("🧑‍🌾 Sans emploi (quitter son poste)", () => this.fire(w));
+      box.appendChild(list);
+    }
+  }
+
+  // Barre d'équipe : une pastille par personnage, son état, et le recrutement.
+  private updateCrew() {
+    const sel = this.selected;
+    const sig = this.workers.map((w) => w.name + (w === sel ? "*" : "") + w.status + (w.data.home ?? "-")).join("|") + "/" + this.save.coins + "/" + this.save.houses.length;
+    if (sig === this.crewSig) return;
+    this.crewSig = sig;
+    const box = document.getElementById("crew") as HTMLElement;
+    box.textContent = "";
+  }
+
+  private updateHud() {
+    const setNum = (id: string, v: number) => {
+      const el = document.getElementById(id) as HTMLElement;
+      if (el.textContent === String(v)) return;
+      const first = el.textContent === "0" && v === 0;
+      el.textContent = String(v);
+      const pill = el.parentElement;
+      if (pill && !first) {
+        pill.classList.remove("bump");
+        void pill.offsetWidth;
+        pill.classList.add("bump");
+      }
+    };
+    const hour = clockHour(this.save.clock);
+    const dk = darkness(hour);
+    const hh = Math.floor(hour);
+    const mm = Math.floor((hour - hh) * 60 / 10) * 10; // toutes les 10 minutes de jeu
+    const label = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+    const icon = dk > 0.8 ? "🌙" : dk > 0.05 ? (hour < 12 ? "🌅" : "🌇") : "☀️";
+    const clockEl = document.getElementById("clock") as HTMLElement;
+    if (clockEl.textContent !== label) clockEl.textContent = label;
+    const clockIcon = document.getElementById("clockIcon") as HTMLElement;
+    if (clockIcon.textContent !== icon) clockIcon.textContent = icon;
+    const se = this.season();
+    const calendar = document.getElementById("calendar") as HTMLElement;
+    const seasonText = `${se.rules.label}`;
+    const seasonIcon = document.getElementById("seasonIcon") as HTMLElement;
+    const seasonName = document.getElementById("seasonName") as HTMLElement;
+    if (seasonName.textContent !== seasonText) seasonName.textContent = seasonText;
+    if (seasonIcon.textContent !== se.rules.emoji) seasonIcon.textContent = se.rules.emoji;
+    calendar.title = `${se.rules.label} : ${se.rules.blurb}`;
+    const dateText = `Jour ${clockDay(this.save.clock)} · année ${se.year} · ${se.dayInSeason}/${SEASON_DAYS}`;
+    const calDate = document.getElementById("calDate") as HTMLElement;
+    if (calDate.textContent !== dateText) calDate.textContent = dateText;
+    (document.getElementById("calBar") as HTMLElement).style.width = `${Math.round(se.prog * 100)}%`; // avancement de la saison
+    if (this.seasonSeen !== se.index) {
+      // nouvelle saison (pas d'annonce au chargement de la partie)
+      if (this.seasonSeen >= 0) toast(`${se.rules.emoji} ${se.rules.label} : ${se.rules.blurb}`);
+      this.seasonSeen = se.index;
+    }
+    const folks = this.workers.length;
+    const beds = this.save.houses.length * HOUSE_CAPACITY;
+    const homeless = this.workers.filter((w) => w.data.home == null).length;
+    const popEl = document.getElementById("pop") as HTMLElement;
+    const popText = `${folks} / ${beds}`;
+    if (popEl.textContent !== popText) {
+      popEl.textContent = popText;
+      const pill = popEl.parentElement;
+      if (pill) {
+        pill.classList.remove("bump");
+        void pill.offsetWidth;
+        pill.classList.add("bump");
+      }
+    }
+    (popEl.parentElement as HTMLElement).title = `${folks} villageois pour ${beds} places en maison${homeless ? ` · ${homeless} sans maison` : ""}`;
+    setNum("coins", this.save.coins);
+    const cap = storageCapacity(this.save);
+    const entries = Object.entries(this.save.goods);
+    if (this.save.sawmills.length || planksStock(this.save) > 0) entries.push(["planks", planksStock(this.save)]);
+    if (this.save.butchers.length || cutsStock(this.save) > 0) entries.push(["cuts", cutsStock(this.save)]); // la viande préparée : boucheries et dépôts
+    if (this.save.apiaries.length || honeyStock(this.save) > 0) entries.push(["honey", honeyStock(this.save)]); // le miel : ruchers et dépôts
+    const sickN = this.workers.filter((w) => w.data.illness).length;
+    if (sickN > 0) entries.push(["sick", sickN]); // les malades
+    const fluN = this.workers.filter((w) => w.data.illness?.kind === "flu").length;
+    if (fluN > 0) entries.push(["flu", fluN]); // l'épidémie de grippe
+    if (berryStock(this.save) > 0) entries.push(["berries", berryStock(this.save)]); // les baies : dans les dépôts
+    if (this.save.lodges.length) entries.push(["meat", meatStock(this.save)]); // la viande est celle des camps de chasseur // les planches sont celles des scieries
+    const goods = entries
+      .filter(([k, n]) => n > 0 || (k === "cuts" && (this.save.butchers.length > 0 || cutsStock(this.save) > 0)) || (k === "honey" && (this.save.apiaries.length > 0 || honeyStock(this.save) > 0)) || (k === "meat" && this.save.lodges.length > 0) || (k === "planks" && (this.save.sawmills.length > 0 || planksStock(this.save) > 0)))
+      .map(([k, n]) => `${GOOD_EMOJIS[k] ?? k} ${k === "wood" ? `${n}/${cap}` : n}`)
+      .join("|");
+    if (goods === this.goodsSig) return;
+    this.goodsSig = goods;
+    const box = document.getElementById("goods") as HTMLElement;
+    box.textContent = "";
+    const now = goods.split("|").filter(Boolean);
+    now.forEach((g, i) => {
+      const pill = document.createElement("div");
+      pill.className = "pill" + (this.goodsPrev.length && this.goodsPrev[i] !== g ? " bump" : ""); // seules les pastilles qui changent rebondissent
+      pill.textContent = g;
+      box.appendChild(pill);
+    });
+    this.goodsPrev = now;
+  }
+}
