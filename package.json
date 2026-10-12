@@ -1,0 +1,54 @@
+{
+  "name": "ferme-2d-plat",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5175",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "electron": "npm run build && electron .",
+    "electron:dev": "electron . --dev",
+    "dist": "npm run build && electron-builder --win --publish never",
+    "release": "npm run build && electron-builder --win --publish always"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.4.0",
+    "vite": "^5.2.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "description": "Ferme : jeu de gestion de village (application de bureau)",
+  "author": "Ferme",
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.ferme.jeu",
+    "productName": "Ferme",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "TON_COMPTE_GITHUB",
+        "repo": "ferme"
+      }
+    ]
+  }
+}
