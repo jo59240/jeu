@@ -3,7 +3,7 @@
 import {
   ARRIVAL_SEC, CAMP_CAPACITY, COSTS, COW_PRICE, CUT_SEC, DAY_SEC, DEPOT_CAPACITY, DEPOT_LEVELS, EXPORT_GOODS, FARM_CROPS, FARM_TANK_CAP, HONEY_CAP, HOUSE_CAPACITY,
   HUNT_RADIUS, JOBS, LODGE_CAP, LOGS_PER_PLANK, LUMBER_RADIUS, MAX_CREW, PLANK_SEC, SEASON_DAYS, SHIP_CYCLE, STABLE_COWS_MAX, WELL_CAP, WET_SEC, CHURCH_GRAVES, SAWMILL_LOGS_CAP,
-  BUTCHER_CUTS_CAP, ILLNESSES, ExportGood, PIGS_MAX, PIG_PRICE, PIG_MEAT, PIG_KEEP, MARKET_BUY_MULT, MARKET_SELL_MULT, MARKET_STAY_SEC,
+  BUTCHER_CUTS_CAP, ILLNESSES, ExportGood, PIGS_MAX, PIG_PRICE, PIG_MEAT, PIG_KEEP, RECIPES, DISH_CAP, DINE_HUNGER, DRAKKAR_STAGES, COLONY_GOAL, MARKET_BUY_MULT, MARKET_SELL_MULT, MARKET_STAY_SEC,
 } from "./balance";
 import { STRUCTURES } from "./structures";
 
@@ -194,6 +194,49 @@ export const HELP_TOPICS: HelpTopic[] = [
     ],
   },
   {
+    id: "pantry",
+    group: "Bâtiments",
+    emoji: "🥫",
+    title: "Garde-manger",
+    structure: "pantry",
+    paras: [
+      cost("pantry"),
+      "Le garde-manger **range toute la nourriture** du village : viande brute et préparée, baies, miel, lait, légumes et herbe. Il se pose et se relie par les chemins comme un dépôt.",
+      "• Dès qu'il y en a un, **ce qui est stocké dans les dépôts y est transporté** (une fois par seconde, tant qu'il y a de la place), et le bois ou les planches qui y arriveraient vont dans un dépôt. Les dépôts gardent donc le **bois et les planches**.",
+      "• Les villageois, la taverne, le port et le marché prennent la nourriture au garde-manger. On peut l'**améliorer** comme un dépôt pour plus de place.",
+      "• L'**eau** reste dans les **puits**.",
+    ],
+  },
+  {
+    id: "tavern",
+    group: "Bâtiments",
+    emoji: "🍺",
+    title: "Taverne",
+    structure: "tavern",
+    paras: [
+      cost("tavern"),
+      `• ${job("tavern")} : le **cuisinier** rapporte les ingrédients des **dépôts** (légumes de la ferme, viande préparée, miel, lait, baies) puis prépare des plats. Chaque recette garde jusqu'à ${DISH_CAP} plats.`,
+      ...RECIPES.map((r) => `• ${r.emoji} **${r.label}** : ${(Object.entries(r.needs) as [ExportGood, number][]).map(([g, n]) => `${n} ${EXPORT_GOODS[g].label.toLowerCase()}`).join(" + ")} → **+${r.energy} énergie**, rassasie **${Math.round(r.sated / 60)} min**.`),
+      `• Un villageois qui a **faim** (à partir de ${DINE_HUNGER} %) ou qui est **fatigué** passe manger à la taverne, puis reprend son travail. Fatigué, il choisit le plat le plus énergétique ; affamé, le plus rassasiant. Tant que le repas le rassasie, il n'a pas faim.`,
+    ],
+  },
+  {
+    id: "shipyard",
+    group: "Bâtiments",
+    emoji: "⛵",
+    title: "Chantier du grand drakkar",
+    structure: "shipyard",
+    paras: [
+      cost("shipyard"),
+      "Comme le port, il se pose **au bord de la mer** (au moins trois cases d'eau contre un côté) ; l'étrave du drakkar est tournée vers l'eau et l'entrée est de l'autre côté.",
+      "Le **but du jeu** : construire un **grand drakkar** pour partir fonder une **colonie** sur une île nouvelle.",
+      `• Le drakkar se construit en **${DRAKKAR_STAGES.length} étapes** : à chacune, tu livres des marchandises **prises dans tes dépôts** (bouton **📦 Livrer depuis les dépôts** dans le menu du chantier). Étapes : ${DRAKKAR_STAGES.map((st) => `**${st.label}**`).join(", ")}.`,
+      "• Le drakkar prend forme sur le chantier à chaque étape. Quand il est terminé, le bouton **⛵ Appareiller** apparaît.",
+      "• En partant, **tout le village embarque** (villageois et pièces) : les bâtiments restent sur l'île quittée, qui est mise de côté. Tu **repars de zéro** sur une île différente.",
+      `• Sur l'île de colonie, l'objectif est d'avoir **${COLONY_GOAL.people} habitants, un port, une église, un marché et une ferme**. Le menu (☰) affiche les objectifs en cours.`,
+    ],
+  },
+  {
     id: "market",
     group: "Bâtiments",
     emoji: "🛒",
@@ -231,7 +274,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     paras: [
       cost("port"),
       `Le port se pose **sur la côte** (au moins deux cases d'eau contre un côté) ; le quai se tourne tout seul vers l'eau. Un **bateau passe toutes les ${SHIP_CYCLE} s**, charge ce qui attend au quai et **te paie** : c'est ta seule source de pièces.`,
-      "• **Tu choisis quoi exporter** : dans le menu du port, un réglage « par bateau » (− / +) pour chaque ressource (0 = pas d'export) ; Maj + clic : de 5 en 5.",
+      "• **Tu choisis quoi exporter** : un clic sur le port ouvre une **fenêtre** avec, pour chaque ressource, un réglage « par bateau » (− / +) (0 = pas d'export) et un **stock minimum à garder** : seul ce qui dépasse ce minimum est exporté. Maj + clic : de 5 en 5.",
       `• Tout peut s'exporter : ${(["wood", "plank", "meat", "cuts", "honey", "berries", "wheat", "corn", "tomato", "carrot", "grass", "milk"] as ExportGood[]).map(price).join(" · ")}.`,
       `• ${job("port")} : les **porteurs** prennent les marchandises là où elles sont (dépôts, scieries, boucheries, camps) et les apportent au quai : **relie-les au port par des chemins**.`,
       "• Le menu montre pour chaque ressource le stock, ce qui est déjà au quai et le **gain maximum par bateau**.",

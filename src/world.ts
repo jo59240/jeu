@@ -1,7 +1,28 @@
 // Génération de la carte : une grande île avec plaines, forêts, collines, lacs et rivières.
 // Tout est déterministe (même graine = même carte) et ne dépend d'aucun élément du navigateur.
 // Les routes et les ponts n'existent pas : ce sont les joueurs qui les poseront.
-import { GRID } from "./config";
+import { GRID, SAVE_KEY } from "./config";
+
+// Le numéro de l'île : 0 pour l'île de départ, puis une île différente à chaque voyage en drakkar. Il est lu dans la sauvegarde (?island=n pour essayer).
+function readIsland(): number {
+  const q = new URLSearchParams(location.search).get("island");
+  if (q !== null && Number.isFinite(Number(q))) return Math.max(0, Math.floor(Number(q)));
+  try {
+    const raw = localStorage.getItem(SAVE_KEY) ?? window.ferme?.readSave(SAVE_KEY) ?? null;
+    const n = raw ? Number((JSON.parse(raw) as { island?: number }).island ?? 0) : 0;
+    return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+  } catch {
+    return 0;
+  }
+}
+export const ISLAND = readIsland();
+const IS = ISLAND * 131; // décale les graines du relief
+const IO = ISLAND * 37; // et les coordonnées du bruit
+// Les reliefs (montagnes, lacs, rivières) tournent d'un quart de tour à chaque île : l'île 0 reste exactement l'île d'origine.
+const turn = (fx: number, fy: number): [number, number] => {
+  const k = ISLAND % 4;
+  return k === 0 ? [fx, fy] : k === 1 ? [1 - fy, fx] : k === 2 ? [1 - fx, 1 - fy] : [fy, 1 - fx];
+};
 
 export const SAMPLES = 8; // points de relief par case : la finesse des courbes de niveau
 export const N = GRID * SAMPLES + 1;
@@ -50,7 +71,7 @@ function hash(ix: number, iy: number, seed: number): number {
   return (h >>> 0) / 4294967296;
 }
 
-function vnoise(x: number, y: number, seed: number): number {
+export function vnoise(x: number, y: number, seed: number): number {
   const ix = Math.floor(x);
   const iy = Math.floor(y);
   const fx = x - ix;
@@ -126,17 +147,24 @@ function curve(points: Pt[], step: number, wiggle: number, seed: number): Pt[] {
 
 const mid = GRID / 2;
 const K = GRID / 128; // les reliefs gardent leurs proportions quand la carte grandit
-const F = (fx: number, fy: number): Pt => [GRID * fx, GRID * fy];
+const F = (fx: number, fy: number): Pt => {
+  const [a, b] = turn(fx, fy);
+  return [GRID * a, GRID * b];
+};
+const Rw = (x: number, y: number): Pt => {
+  const [a, b] = turn(x / GRID, y / GRID);
+  return [GRID * a, GRID * b];
+};
 
 export const RIVERS: { path: Pt[]; width: number }[] = [
   // du lac du nord-est jusqu'à la mer, au sud
-  { path: curve([F(0.8, 0.19), F(0.72, 0.31), F(0.64, 0.44), F(0.63, 0.58), F(0.67, 0.7), F(0.58, 0.83), F(0.47, 0.91), [GRID * 0.44, GRID + 3]], 0.5, 2.0, 5), width: 2.1 },
+  { path: curve([F(0.8, 0.19), F(0.72, 0.31), F(0.64, 0.44), F(0.63, 0.58), F(0.67, 0.7), F(0.58, 0.83), F(0.47, 0.91), Rw(GRID * 0.44, GRID + 3)], 0.5, 2.0, 5 + IS), width: 2.1 },
   // de la montagne du nord-ouest jusqu'à la mer, à l'ouest
-  { path: curve([F(0.16, 0.2), F(0.2, 0.33), F(0.14, 0.46), F(0.07, 0.58), [-3, GRID * 0.68]], 0.5, 1.6, 9), width: 1.7 },
+  { path: curve([F(0.16, 0.2), F(0.2, 0.33), F(0.14, 0.46), F(0.07, 0.58), Rw(-3, GRID * 0.68)], 0.5, 1.6, 9 + IS), width: 1.7 },
   // relie les deux lacs de l'ouest
-  { path: curve([F(0.3, 0.4), F(0.26, 0.5), F(0.31, 0.6), F(0.22, 0.72)], 0.5, 1.2, 14), width: 1.4 },
+  { path: curve([F(0.3, 0.4), F(0.26, 0.5), F(0.31, 0.6), F(0.22, 0.72)], 0.5, 1.2, 14 + IS), width: 1.4 },
   // descend de la montagne du sud jusqu'à la côte
-  { path: curve([F(0.57, 0.9), F(0.66, 0.93), [GRID * 0.7, GRID + 3]], 0.5, 0.8, 19), width: 1.3 },
+  { path: curve([F(0.57, 0.9), F(0.66, 0.93), Rw(GRID * 0.7, GRID + 3)], 0.5, 0.8, 19 + IS), width: 1.3 },
 ];
 
 // ---------- relief ----------
@@ -175,7 +203,7 @@ function buildRelief() {
   }
 
   // [x, y en fractions de la carte, rayon en cases, hauteur]
-  const mountains: [number, number, number, number][] = [
+  const mountains0: [number, number, number, number][] = [
     [0.82, 0.13, 20, 0.5],
     [0.13, 0.14, 16, 0.45],
     [0.9, 0.62, 12, 0.32],
@@ -183,7 +211,7 @@ function buildRelief() {
     [0.57, 0.9, 11, 0.34],
     [0.5, 0.08, 9, 0.3],
   ];
-  const lakes: [number, number, number][] = [
+  const lakes0: [number, number, number][] = [
     [0.74, 0.3, 10],
     [0.22, 0.72, 7],
     [0.3, 0.4, 6],
@@ -191,19 +219,22 @@ function buildRelief() {
     [0.46, 0.2, 5],
   ];
 
+  const mountains = mountains0.map(([fx, fy, r, h]) => [...turn(fx, fy), r, h] as [number, number, number, number]);
+  const lakes = lakes0.map(([fx, fy, r]) => [...turn(fx, fy), r] as [number, number, number]);
+
   for (let sy = 0; sy < N; sy++) {
     for (let sx = 0; sx < N; sx++) {
       const x = sx / SAMPLES;
       const y = sy / SAMPLES;
       const k = sy * N + sx;
 
-      let e = fbm(x * 0.05 + 10, y * 0.05 + 3, 11, 5);
+      let e = fbm(x * 0.05 + 10 + IO, y * 0.05 + 3 + IO, 11 + IS, 5);
       e = (e - 0.5) * 1.55 + 0.6; // un peu moins d'eau
       for (const [fx, fy, r, h] of mountains) e += h * Math.pow(1 - smoothstep(0, r, Math.hypot(x - fx * GRID, y - fy * GRID) / K), 1.4);
       for (const [fx, fy, r] of lakes) e -= 0.45 * (1 - smoothstep(r * 0.4 * K, r * 0.85 * K, Math.hypot(x - fx * GRID, y - fy * GRID)));
 
       // île : la mer entoure la carte
-      const edge = smoothstep(2, 9 + 4 * vnoise(x * 0.1, y * 0.1, 77), Math.min(x, y, GRID - x, GRID - y));
+      const edge = smoothstep(2, 9 + 4 * vnoise(x * 0.1, y * 0.1, 77 + IS), Math.min(x, y, GRID - x, GRID - y));
       e = lerp(0.12, e, edge);
 
       // rivières : le lit descend jusqu'à l'eau peu profonde
@@ -216,8 +247,8 @@ function buildRelief() {
       flatZone[k] = flat;
 
       elev[k] = e;
-      moist[k] = fbm(x * 0.075 + 50, y * 0.075 + 90, 29, 4);
-      tone[k] = fbm(x * 0.12 + 5, y * 0.12 + 40, 3, 3);
+      moist[k] = fbm(x * 0.075 + 50 + IO, y * 0.075 + 90 + IO, 29 + IS, 4);
+      tone[k] = fbm(x * 0.12 + 5 + IO, y * 0.12 + 40 + IO, 3 + IS, 3);
     }
   }
   // ombrage : différence d'altitude entre le coin haut-gauche et bas-droit
@@ -270,7 +301,7 @@ export const objects: MapObject[] = [];
 export const loneTreeOfCell = new Map<number, number>();
 
 function classify() {
-  const r = rng(2024);
+  const r = rng(2024 + ISLAND * 7);
   for (let gy = 0; gy < GRID; gy++) {
     for (let gx = 0; gx < GRID; gx++) {
       const cx = gx + 0.5;
@@ -327,7 +358,7 @@ function classify() {
     }
   }
   // arbustes à baies, semés au hasard sur l'herbe (un tirage à part : le reste de la carte ne bouge pas)
-  const rb = rng(777);
+  const rb = rng(777 + ISLAND * 7);
   for (let gy = 0; gy < GRID; gy++) {
     for (let gx = 0; gx < GRID; gx++) {
       if (cellTerrain[gy * GRID + gx] !== T.Grass || rb() > 0.0035) continue;

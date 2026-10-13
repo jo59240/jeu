@@ -3,8 +3,12 @@ import { CROP_BY_ID, stageOf } from "./crops";
 import { Cell, Port, SHIP_ARRIVE, SHIP_CYCLE, SHIP_DEPART, SHIP_DOCKED, SHIP_GONE, growth } from "./state";
 import { STRUCTURES } from "./structures";
 
-import { isViking, themeContext } from "./theme";
+import { getRoadStyle, isViking, themeContext } from "./theme";
 import { drawLongship } from "./viking";
+import * as P from "./painted";
+
+// Une variante de dessin stable pour chaque emplacement (les bâtiments du même type ne sont pas tous identiques).
+const variant = (gx: number, gy: number) => Math.abs(gx * 7 + gy * 3) % 4;
 
 export const C = 64; // pixels du monde par case
 
@@ -84,8 +88,17 @@ export function drawCamp(g: CanvasRenderingContext2D, gx: number, gy: number, ro
   rotated(g, gx, gy, 2, rot, () => campBody(g, gx, gy));
 }
 
-export function drawDepot(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, level = 1) {
-  rotated(g, gx, gy, 3, rot, () => depotBody(g, gx, gy, level));
+export function drawDepot(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, level = 1, pantry = false) {
+  rotated(g, gx, gy, 3, rot, () => {
+    depotBody(g, gx, gy, level, pantry);
+    if (pantry && !isViking()) {
+      g.fillStyle = "rgba(70,150,80,0.38)";
+      g.fillRect(gx * C + 8, gy * C + 8, 3 * C - 16, 2 * C - 20);
+      g.font = "34px sans-serif";
+      g.textAlign = "center";
+      g.fillText("🥫", gx * C + 1.5 * C, gy * C + 1.1 * C);
+    }
+  });
 }
 
 // smoke : quelqu'un est à l'intérieur, une fumée sort de la cheminée (elle monte toujours vers le haut, quelle que soit l'orientation).
@@ -151,6 +164,10 @@ export function drawSawmill(g: CanvasRenderingContext2D, gx: number, gy: number,
 }
 
 function sawmillBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  if (isViking()) {
+    const v = variant(gx, gy);
+    return P.blit(g, `sawmill:${v}`, gx, gy, 3, (c) => P.paintSawmill(c, v * 139 + 13));
+  }
   const x = gx * C;
   const y = gy * C;
   const w = 3 * C;
@@ -251,6 +268,10 @@ export function drawApiary(g: CanvasRenderingContext2D, gx: number, gy: number, 
 }
 
 function apiaryBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  if (isViking()) {
+    const v = variant(gx, gy);
+    return P.blit(g, `apiary:${v}`, gx, gy, 2, (c) => P.paintApiary(c, v * 163 + 29));
+  }
   const x = gx * C;
   const y = gy * C;
   const w = 2 * C;
@@ -462,6 +483,10 @@ function farmBody(g: CanvasRenderingContext2D, gx: number, gy: number, plots: { 
   const x = gx * C;
   const y = gy * C;
   const w = 5 * C;
+  const painted = isViking();
+  const fv = variant(gx, gy);
+  if (painted) P.blit(g, `farm:${fv}`, gx, gy, 5, (c) => P.paintFarm(c, fv * 211 + 67));
+  if (!painted) {
   // seuil de l'entrée (la case d'entrée est juste en dessous, au milieu)
   g.fillStyle = "#c9a96e";
   g.beginPath();
@@ -487,6 +512,7 @@ function farmBody(g: CanvasRenderingContext2D, gx: number, gy: number, plots: { 
   // allée de terre vers la porte
   g.fillStyle = "#cdb78a";
   g.fillRect(x + w / 2 - 22, y + 232, 44, w - 232);
+  }
   // douze parcelles : quatre colonnes, trois rangées
   for (let i = 0; i < 12; i++) {
     const pl = plots?.[i];
@@ -495,6 +521,7 @@ function farmBody(g: CanvasRenderingContext2D, gx: number, gy: number, plots: { 
     drawPlot(g, x + 14 + col * 74, y + 14 + row * 72, 68, 66, pl?.c ?? "wheat", pl ? pl.p : i % 3 === 0 ? -1 : 0.45, pl ? pl.wet : 1, t, plots ? pl?.t ?? "" : "wheat");
   }
   // grange rouge en bas à gauche
+  if (!painted) {
   const bx = x + 16;
   const by = y + 238;
   g.fillStyle = "rgba(40,30,10,0.26)";
@@ -515,6 +542,7 @@ function farmBody(g: CanvasRenderingContext2D, gx: number, gy: number, plots: { 
   g.moveTo(bx + 64, by + 28);
   g.lineTo(bx + 28, by + 62);
   g.stroke();
+  }
   // cuve d'eau en bas à droite : le niveau se voit
   const cx = x + w - 54;
   const cy = y + 270;
@@ -563,6 +591,7 @@ function drawCow(g: CanvasRenderingContext2D, x: number, y: number, dir: number,
   g.beginPath();
   g.ellipse(0, 0, 19, 11, 0, 0, Math.PI * 2);
   g.fill();
+  if (isViking()) P.furShade(g, 0, 0, 19, 11, variant * 17 + 3, true, 1);
   g.strokeStyle = "#8a7d6a";
   g.lineWidth = 1.5;
   g.stroke();
@@ -604,12 +633,284 @@ function drawCow(g: CanvasRenderingContext2D, x: number, y: number, dir: number,
   g.restore();
 }
 
+// La taverne (3 × 3 cases) : une maison de bois au toit de tuiles, une cheminée qui fume quand on cuisine, une enseigne en forme de chope et des bancs devant.
+export function drawTavern(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, cooking = false, t = 0) {
+  rotated(g, gx, gy, 3, rot, () => {
+    const x = gx * C;
+    const y = gy * C;
+    const w = 3 * C;
+    if (isViking()) {
+      const v = variant(gx, gy);
+      P.blit(g, `tavern:${v}`, gx, gy, 3, (c) => P.paintTavern(c, v * 191 + 47));
+      if (cooking) { // la fumée de la cheminée monte au-dessus de la cheminée
+        for (let i = 0; i < 3; i++) {
+          const k = (t / 900 + i / 3) % 1;
+          g.fillStyle = `rgba(235,235,235,${0.55 * (1 - k)})`;
+          g.beginPath();
+          g.arc(x + 152 + Math.sin(k * 6 + i) * 6, y + 20 - k * 30, 5 + k * 7, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
+      return;
+    }
+    g.fillStyle = "#c9b27a"; // sol de terre battue
+    g.beginPath();
+    g.roundRect(x + 3, y + 3, w - 6, w - 6, 14);
+    g.fill();
+    g.fillStyle = "#c9a96e"; // seuil de l'entrée
+    g.beginPath();
+    g.roundRect(x + C + 8, y + w - 6, C - 16, 24, 8);
+    g.fill();
+    g.fillStyle = "rgba(40,30,10,0.28)"; // ombre du toit
+    g.fillRect(x + 14, y + 14, w - 22, 120);
+    g.fillStyle = "#a8523a"; // toit de tuiles (deux pans)
+    g.fillRect(x + 8, y + 8, (w - 16) / 2, 120);
+    g.fillStyle = "#8f3f2c";
+    g.fillRect(x + 8 + (w - 16) / 2, y + 8, (w - 16) / 2, 120);
+    g.strokeStyle = "rgba(60,20,10,0.35)";
+    g.lineWidth = 1.2;
+    for (let i = 1; i < 10; i++) {
+      g.beginPath();
+      g.moveTo(x + 8, y + 8 + i * 12);
+      g.lineTo(x + w - 8, y + 8 + i * 12);
+      g.stroke();
+    }
+    g.strokeStyle = "#4e2a1a";
+    g.lineWidth = 4;
+    g.beginPath();
+    g.moveTo(x + w / 2, y + 8);
+    g.lineTo(x + w / 2, y + 128);
+    g.stroke();
+    g.lineWidth = 3;
+    g.strokeRect(x + 8, y + 8, w - 16, 120);
+    g.fillStyle = "#2d1d14"; // porte
+    g.fillRect(x + w / 2 - 20, y + 122, 40, 12);
+    // cheminée
+    g.fillStyle = "#7d7a74";
+    g.fillRect(x + w - 54, y + 22, 24, 24);
+    g.strokeStyle = "#4a4743";
+    g.lineWidth = 2;
+    g.strokeRect(x + w - 54, y + 22, 24, 24);
+    if (cooking) {
+      for (let i = 0; i < 3; i++) {
+        const k = ((t / 900 + i / 3) % 1);
+        g.fillStyle = `rgba(230,230,230,${0.55 * (1 - k)})`;
+        g.beginPath();
+        g.arc(x + w - 42 + Math.sin(k * 6 + i) * 6, y + 18 - k * 26, 5 + k * 6, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+    // enseigne : une chope
+    g.fillStyle = "#6a4a2a";
+    g.fillRect(x + 22, y + 138, 4, 22);
+    g.fillStyle = "#e0b04a";
+    g.beginPath();
+    g.roundRect(x + 28, y + 140, 22, 22, 4);
+    g.fill();
+    g.fillStyle = "#f6f1e0";
+    g.fillRect(x + 28, y + 140, 22, 7);
+    g.strokeStyle = "#4e3320";
+    g.lineWidth = 2;
+    g.strokeRect(x + 28, y + 140, 22, 22);
+    g.beginPath();
+    g.arc(x + 52, y + 151, 6, -Math.PI / 2, Math.PI / 2);
+    g.stroke();
+    // bancs et tonneau
+    g.fillStyle = "#7a5230";
+    g.fillRect(x + 100, y + 150, 50, 12);
+    g.fillRect(x + 100, y + 172, 50, 12);
+    g.fillStyle = "#5e3c20";
+    g.beginPath();
+    g.arc(x + w - 30, y + 162, 14, 0, Math.PI * 2);
+    g.fill();
+    g.strokeStyle = "#2d1d14";
+    g.lineWidth = 2;
+    g.stroke();
+  });
+}
+
+// Le chantier naval (6 × 6 cases, au bord de la mer) : un berceau de bois et le grand drakkar qui prend forme selon l'étape (0 : berceau seul, 4 : drakkar terminé),
+// l'étrave tournée vers la mer (le côté « nord » du dessin, comme le quai du port).
+export function drawShipyard(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, stage = 0, t = 0) {
+  rotated(g, gx, gy, 6, rot, () => {
+    const x = gx * C;
+    const y = gy * C;
+    const w = 6 * C;
+    const painted = isViking();
+    if (painted) P.blit(g, `shipyard:${variant(gx, gy)}`, gx, gy, 6, (c) => P.paintShipyard(c, variant(gx, gy) * 193 + 53));
+    if (!painted) {
+    g.fillStyle = "#cdb98a"; // terre battue
+      g.beginPath();
+      g.roundRect(x + 3, y + 3, w - 6, w - 6, 16);
+      g.fill();
+      g.strokeStyle = "#8a7340";
+      g.lineWidth = 3;
+      g.stroke();
+      g.fillStyle = "#c9a96e"; // seuil de l'entrée
+      g.beginPath();
+      g.roundRect(x + 2 * C + 8, y + w - 6, C - 16, 24, 8);
+      g.fill();
+      g.fillStyle = "#d8c89a"; // allée vers l'entrée
+      g.fillRect(x + 2 * C + 6, y + 4.6 * C, C - 12, 1.4 * C);
+    }
+    // la cale : deux rails de bois qui plongent vers la mer (en haut), sur une case de plus
+    const cx = x + w / 2;
+    g.fillStyle = "rgba(20,40,60,0.25)";
+    g.fillRect(cx - 52, y - C * 0.9 + 5, 104, C * 1.2);
+    g.fillStyle = "#a47c48";
+    g.fillRect(cx - 54, y - C * 0.9, 108, C * 1.2);
+    g.strokeStyle = "#7a5a34";
+    g.lineWidth = 2;
+    for (let i = 0; i < 5; i++) {
+      g.beginPath();
+      g.moveTo(cx - 54, y - C * 0.9 + i * 14);
+      g.lineTo(cx + 54, y - C * 0.9 + i * 14);
+      g.stroke();
+    }
+    g.save();
+    g.translate(cx, y + 3 * C + 6);
+    g.rotate(-Math.PI / 2); // l'étrave vers la mer
+    g.scale(1.45, 1.45);
+    g.fillStyle = "#6a4a2a"; // le berceau : deux poutres et des supports
+    g.fillRect(-105, -46, 210, 7);
+    g.fillRect(-105, 39, 210, 7);
+    g.fillStyle = "#7a5a34";
+    for (let i = 0; i < 7; i++) g.fillRect(-98 + i * 32, -50, 5, 100);
+    const hull = () => {
+      g.beginPath();
+      g.moveTo(104, -6);
+      g.quadraticCurveTo(60, 38, -10, 36);
+      g.quadraticCurveTo(-70, 34, -102, 4);
+      g.quadraticCurveTo(-70, -34, -10, -36);
+      g.quadraticCurveTo(60, -38, 104, -6);
+      g.closePath();
+    };
+    if (stage >= 2) {
+      g.fillStyle = "#8a5a32";
+      hull();
+      g.fill();
+      g.strokeStyle = "#2a1a10";
+      g.lineWidth = 3;
+      g.stroke();
+      g.strokeStyle = "rgba(30,15,5,0.35)";
+      g.lineWidth = 1.5;
+      for (const k of [-0.5, -0.25, 0, 0.25, 0.5]) {
+        g.beginPath();
+        g.moveTo(-92, k * 60);
+        g.lineTo(92, k * 60);
+        g.stroke();
+      }
+    } else {
+      g.strokeStyle = "#6a4426"; // la quille et les membrures
+      g.lineWidth = 5;
+      g.beginPath();
+      g.moveTo(-100, 4);
+      g.lineTo(102, -6);
+      g.stroke();
+      if (stage >= 1) {
+        g.lineWidth = 3;
+        for (let i = 0; i < 9; i++) {
+          const px = -80 + i * 20;
+          const hh = 30 - Math.abs(px) * 0.18;
+          g.beginPath();
+          g.moveTo(px, -hh);
+          g.quadraticCurveTo(px + 4, 0, px, hh);
+          g.stroke();
+        }
+      }
+    }
+    if (stage >= 3) {
+      g.fillStyle = "#2a1a10"; // le mât
+      g.beginPath();
+      g.arc(0, 0, 5, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = "#3a2415";
+      g.lineWidth = 3;
+      g.beginPath();
+      g.moveTo(0, -38);
+      g.lineTo(0, 38);
+      g.stroke();
+    }
+    if (stage >= 4) {
+      g.fillStyle = "#e6d9b8"; // la voile rayée
+      g.beginPath();
+      g.roundRect(-14, -36, 28, 72, 5);
+      g.fill();
+      g.fillStyle = "#a8322d";
+      for (let i = 0; i < 4; i++) g.fillRect(-14 + i * 7, -36, 3.5, 72);
+      g.strokeStyle = "#2a1a10";
+      g.lineWidth = 2;
+      g.beginPath();
+      g.roundRect(-14, -36, 28, 72, 5);
+      g.stroke();
+      g.fillStyle = "#3a2415"; // la proue en tête de dragon
+      g.beginPath();
+      g.moveTo(98, -2);
+      g.quadraticCurveTo(108, -22, 120, -20);
+      g.lineTo(128, -14);
+      g.lineTo(118, -10);
+      g.quadraticCurveTo(110, -2, 106, 4);
+      g.closePath();
+      g.fill();
+      for (let i = 0; i < 6; i++) {
+        g.fillStyle = ["#a8322d", "#c9972f", "#2f5f8a", "#e6d9b8"][i % 4];
+        for (const side of [-1, 1]) {
+          g.beginPath();
+          g.arc(-70 + i * 28, side * 28, 6, 0, Math.PI * 2);
+          g.fill();
+          g.strokeStyle = "#2a1a10";
+          g.lineWidth = 1.5;
+          g.stroke();
+        }
+      }
+    }
+    g.restore();
+    if (stage >= 4) { // un fanion quand le drakkar est prêt à partir
+      const wave = Math.sin(t / 240) * 3;
+      g.strokeStyle = "#2a1a10";
+      g.lineWidth = 3;
+      g.beginPath();
+      g.moveTo(x + w - 16, y + 8);
+      g.lineTo(x + w - 16, y + 60);
+      g.stroke();
+      g.fillStyle = "#e8c24e";
+      g.beginPath();
+      g.moveTo(x + w - 16, y + 8);
+      g.lineTo(x + w - 44, y + 15 + wave);
+      g.lineTo(x + w - 16, y + 28);
+      g.closePath();
+      g.fill();
+    }
+  });
+}
+
 // Le marché (3 × 3 cases) : trois étals aux auvents rayés, des caisses, et un fanion quand la caravane est là.
 export function drawMarket(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, here = false, t = 0) {
   rotated(g, gx, gy, 3, rot, () => {
     const x = gx * C;
     const y = gy * C;
     const w = 3 * C;
+    if (isViking()) {
+      const v = variant(gx, gy);
+      P.blit(g, `market:${v}`, gx, gy, 3, (c) => P.paintMarket(c, v * 181 + 43));
+      if (here) { // fanion de la caravane
+        const wave = Math.sin(t / 240) * 3;
+        g.strokeStyle = "#2a1a10";
+        g.lineWidth = 3;
+        g.beginPath();
+        g.moveTo(x + w - 12, y + 6);
+        g.lineTo(x + w - 12, y + 52);
+        g.stroke();
+        g.fillStyle = "#e8c24e";
+        g.beginPath();
+        g.moveTo(x + w - 12, y + 6);
+        g.lineTo(x + w - 38, y + 12 + wave);
+        g.lineTo(x + w - 12, y + 24);
+        g.closePath();
+        g.fill();
+      }
+      return;
+    }
     g.fillStyle = "#c9b27a"; // place pavée
     g.beginPath();
     g.roundRect(x + 3, y + 3, w - 6, w - 6, 12);
@@ -732,6 +1033,7 @@ function drawPig(g: CanvasRenderingContext2D, x: number, y: number, dir: number,
   g.beginPath();
   g.ellipse(0, 0, 16, 10, 0, 0, Math.PI * 2);
   g.fill();
+  if (isViking()) P.furShade(g, 0, 0, 16, 10, 41, true, 0.8);
   g.strokeStyle = "#a36a66";
   g.lineWidth = 1.5;
   g.stroke();
@@ -783,6 +1085,37 @@ export function drawPigpen(g: CanvasRenderingContext2D, gx: number, gy: number, 
 }
 
 function pigpenBody(g: CanvasRenderingContext2D, gx: number, gy: number, pigs: { age: number; eat: number; drink: number }[], t: number, feed: number, water: number) {
+  if (isViking()) {
+    const x = gx * C;
+    const y = gy * C;
+    const w = 4 * C;
+    const v = variant(gx, gy);
+    P.blit(g, `pigpen:${v}`, gx, gy, 4, (c) => P.paintPen(c, v * 199 + 61, "pigpen"));
+    const tx = x + w - 112;
+    const ty = y + w - 60;
+    g.fillStyle = "rgba(20,14,6,0.35)";
+    g.fillRect(tx + 4, ty + 5, 96, 40);
+    g.fillStyle = "#6a4a2a";
+    g.fillRect(tx, ty, 96, 40);
+    g.fillStyle = "#e08a3a";
+    g.fillRect(tx + 4, ty + 4, 40 * Math.max(0.08, Math.min(1, feed)), 32);
+    g.fillStyle = "#3a86c8";
+    g.fillRect(tx + 52, ty + 4, 40 * Math.max(0.08, Math.min(1, water)), 32);
+    g.strokeStyle = "#3a2615";
+    g.lineWidth = 2.5;
+    g.strokeRect(tx, ty, 96, 40);
+    g.beginPath();
+    g.moveTo(tx + 48, ty);
+    g.lineTo(tx + 48, ty + 40);
+    g.stroke();
+    pigs.forEach((p, i) => {
+      const phase = t / (1700 + i * 190) + i * 2.3;
+      const cx = x + 52 + (i % 4) * 54 + Math.sin(phase) * 15;
+      const cy = y + 150 + Math.floor(i / 4) * 44 + Math.cos(phase * 0.8 + i) * 7;
+      drawPig(g, cx, cy, Math.cos(phase) >= 0 ? 1 : -1, p.age >= 240 ? 1 : 0.65 + 0.35 * (p.age / 240), Math.sin(phase * 0.5 + i) > 0.5, p.eat > 90 || p.drink > 68);
+    });
+    return;
+  }
   const x = gx * C;
   const y = gy * C;
   const w = 4 * C;
@@ -875,7 +1208,43 @@ export function drawStable(g: CanvasRenderingContext2D, gx: number, gy: number, 
   rotated(g, gx, gy, 4, rot, () => stableBody(g, gx, gy, cows, t, feed, water));
 }
 
+// ---------- style « peint » (thème viking) : voir painted.ts ----------
+
+function stablePainted(g: CanvasRenderingContext2D, gx: number, gy: number, cows: { eat: number; drink: number }[], t: number, feed: number, water: number) {
+  const x = gx * C;
+  const y = gy * C;
+  const w = 4 * C;
+  const v = variant(gx, gy);
+  P.blit(g, `stable:${v}`, gx, gy, 4, (c) => P.paintPen(c, v * 197 + 59, "stable"));
+  // auge et abreuvoir (le niveau se voit)
+  const tx = x + w - 112;
+  const ty = y + w - 60;
+  g.fillStyle = "rgba(20,14,6,0.35)";
+  g.fillRect(tx + 4, ty + 5, 96, 40);
+  g.fillStyle = "#6a4a2a";
+  g.fillRect(tx, ty, 96, 40);
+  g.fillStyle = "#c9a64a";
+  g.fillRect(tx + 4, ty + 4, 40 * Math.max(0.08, Math.min(1, feed)), 32);
+  g.fillStyle = "#3a86c8";
+  g.fillRect(tx + 52, ty + 4, 40 * Math.max(0.08, Math.min(1, water)), 32);
+  g.strokeStyle = "#3a2615";
+  g.lineWidth = 2.5;
+  g.strokeRect(tx, ty, 96, 40);
+  g.beginPath();
+  g.moveTo(tx + 48, ty);
+  g.lineTo(tx + 48, ty + 40);
+  g.stroke();
+  // les vaches qui se promènent dans l'enclos
+  cows.forEach((c, i) => {
+    const phase = t / (1900 + i * 230) + i * 2.1;
+    const cx = x + 56 + (i % 3) * 66 + Math.sin(phase) * 20;
+    const cy = y + 150 + Math.floor(i / 3) * 40 + Math.cos(phase * 0.7 + i) * 8;
+    drawCow(g, cx, cy, Math.cos(phase) >= 0 ? 1 : -1, i, Math.sin(phase * 0.4 + i) > 0.55, c.eat > 105 || c.drink > 75);
+  });
+}
+
 function stableBody(g: CanvasRenderingContext2D, gx: number, gy: number, cows: { eat: number; drink: number }[], t: number, feed: number, water: number) {
+  if (isViking()) return stablePainted(g, gx, gy, cows, t, feed, water);
   const x = gx * C;
   const y = gy * C;
   const w = 4 * C;
@@ -966,6 +1335,10 @@ export function drawChurch(g: CanvasRenderingContext2D, gx: number, gy: number, 
 }
 
 function churchBody(g: CanvasRenderingContext2D, gx: number, gy: number, graves: number) {
+  if (isViking()) {
+    const v = variant(gx, gy);
+    return P.blit(g, `church:${v}:${graves}`, gx, gy, 3, (c) => P.paintChurch(c, v * 179 + 41, graves));
+  }
   const x = gx * C;
   const y = gy * C;
   const w = 3 * C;
@@ -1122,6 +1495,10 @@ export function drawClinic(g: CanvasRenderingContext2D, gx: number, gy: number, 
 }
 
 function clinicBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  if (isViking()) {
+    const v = variant(gx, gy);
+    return P.blit(g, `clinic:${v}`, gx, gy, 2, (c) => P.paintClinic(c, v * 167 + 31));
+  }
   const x = gx * C;
   const y = gy * C;
   const w = 2 * C;
@@ -1186,6 +1563,12 @@ export function drawPort(g: CanvasRenderingContext2D, gx: number, gy: number, ro
 }
 
 function portBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  if (isViking()) {
+    const v = variant(gx, gy);
+    P.blit(g, `port:${v}`, gx, gy, 3, (c) => P.paintPort(c, v * 223 + 71));
+    P.drawPier(g, gx * C, gy * C);
+    return;
+  }
   const x = gx * C;
   const y = gy * C;
   const w = 3 * C;
@@ -1381,6 +1764,10 @@ export function drawButcher(g: CanvasRenderingContext2D, gx: number, gy: number,
 }
 
 function butcherBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  if (isViking()) {
+    const v = variant(gx, gy);
+    return P.blit(g, `butcher:${v}`, gx, gy, 3, (c) => P.paintButcher(c, v * 157 + 23));
+  }
   const x = gx * C;
   const y = gy * C;
   const w = 3 * C;
@@ -1482,6 +1869,10 @@ export function drawLodge(g: CanvasRenderingContext2D, gx: number, gy: number, r
 }
 
 function lodgeBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  if (isViking()) {
+    const v = variant(gx, gy);
+    return P.blit(g, `lodge:${v}`, gx, gy, 2, (c) => P.paintLodge(c, v * 151 + 19));
+  }
   const x = gx * C;
   const y = gy * C;
   const w = 2 * C;
@@ -1564,6 +1955,10 @@ export function drawWell(g: CanvasRenderingContext2D, gx: number, gy: number, ro
 }
 
 function wellBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  if (isViking()) {
+    const v = variant(gx, gy);
+    return P.blit(g, `well:${v}`, gx, gy, 2, (c) => P.paintWell(c, v * 149 + 17));
+  }
   const x = gx * C;
   const y = gy * C;
   const w = 2 * C;
@@ -1640,6 +2035,10 @@ function wellBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
 // Maison (2 × 2 cases), vue de dessus : toit de tuiles à deux pans, cheminée et porte en bas à gauche.
 // smoke : quelqu'un est à l'intérieur, une fumée sort de la cheminée.
 function houseBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  if (isViking()) {
+    const v = variant(gx, gy);
+    return P.blit(g, `house:${v}`, gx, gy, 2, (c) => P.paintHouse(c, v * 131 + 7));
+  }
   const x = gx * C;
   const y = gy * C;
   const w = 2 * C;
@@ -1705,6 +2104,10 @@ function houseBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
 
 // Camp de bûcheron (2 × 2 cases) : sol piétiné, tente, tas de bûches, foyer et souche avec une hache.
 function campBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
+  if (isViking()) {
+    const v = variant(gx, gy);
+    return P.blit(g, `camp:${v}`, gx, gy, 2, (c) => P.paintCamp(c, v * 137 + 11));
+  }
   const x = gx * C;
   const y = gy * C;
   const w = 2 * C;
@@ -1836,7 +2239,15 @@ function campBody(g: CanvasRenderingContext2D, gx: number, gy: number) {
 }
 
 // Dépôt (3 × 3 cases) : grand entrepôt au toit de planches, porte ouverte devant, caisses et tonneau dehors.
-function depotBody(g: CanvasRenderingContext2D, gx: number, gy: number, level = 1) {
+function depotBody(g: CanvasRenderingContext2D, gx: number, gy: number, level = 1, pantry = false) {
+  if (isViking() && pantry) {
+    const v = variant(gx, gy);
+    return P.blit(g, `pantry:${v}:${level}`, gx, gy, 3, (c) => P.paintPantry(c, v * 227 + 73, level));
+  }
+  if (isViking()) {
+    const v = variant(gx, gy);
+    return P.blit(g, `depot:${v}:${level}`, gx, gy, 3, (c) => P.paintDepot(c, v * 173 + 37, level));
+  }
   const x = gx * C;
   const y = gy * C;
   const w = 3 * C;
@@ -1973,16 +2384,395 @@ function depotBody(g: CanvasRenderingContext2D, gx: number, gy: number, level = 
 
 // Les chemins sont tracés d'un seul trait : chaque case est un disque relié à ses voisines, en trois passes
 // (ombre, bord foncé, terre claire) pour que les virages et les carrefours soient continus.
-export function drawRoads(g: CanvasRenderingContext2D, roads: Record<number, 1>, grid: number, view: { x0: number; y0: number; x1: number; y1: number }) {
+// Une case de chemin « réaliste » dessinée une fois : terre granuleuse, ornières, cailloux, brins d'herbe, bords irréguliers. `mask` : voisins reliés (1 haut, 2 droite, 4 bas, 8 gauche).
+const roadTiles = new Map<string, HTMLCanvasElement>();
+function roadTile(mask: number, variant: number): HTMLCanvasElement {
+  const key = `${mask}:${variant}`;
+  let cv = roadTiles.get(key);
+  if (cv) return cv;
+  cv = document.createElement("canvas");
+  cv.width = cv.height = C * 2;
+  const t = cv.getContext("2d")!;
+  themeContext(t);
+  t.scale(2, 2);
+  const r = P.prand(mask * 131 + variant * 977 + 7);
+  const hw = 0.33 * C;
+  // les rectangles du chemin dans la case (origine au centre)
+  const rects: [number, number, number, number][] = [[-hw, -hw, hw, hw]];
+  if (mask & 1) rects.push([-hw, -C / 2, hw, -hw]);
+  if (mask & 2) rects.push([hw, -hw, C / 2, hw]);
+  if (mask & 4) rects.push([-hw, hw, hw, C / 2]);
+  if (mask & 8) rects.push([-C / 2, -hw, -hw, hw]);
+  // distance (négative à l'intérieur) au chemin
+  const dist = (x: number, y: number) => {
+    let best = Infinity;
+    for (const [x0, y0, x1, y1] of rects) {
+      const dx = Math.max(x0 - x, 0, x - x1);
+      const dy = Math.max(y0 - y, 0, y - y1);
+      const d = dx || dy ? Math.hypot(dx, dy) : -Math.min(x - x0, x1 - x, y - y0, y1 - y);
+      if (d < best) best = d;
+    }
+    return best;
+  };
+  t.translate(C / 2, C / 2);
+  // bords irréguliers : des taches de terre qui mordent sur l'herbe, des touffes d'herbe qui mordent sur la terre
+  for (let i = 0; i < 90; i++) {
+    const x = (r() - 0.5) * (C - 8);
+    const y = (r() - 0.5) * (C - 8);
+    const d = dist(x, y);
+    if (Math.abs(d) > 0.07 * C) continue;
+    const rad = (0.03 + r() * 0.05) * C;
+    if (x < -C / 2 + rad + 1 || x > C / 2 - rad - 1 || y < -C / 2 + rad + 1 || y > C / 2 - rad - 1) continue;
+    t.fillStyle = d < 0 ? (r() < 0.55 ? "rgba(150,126,86,0.85)" : "rgba(104,150,70,0.55)") : r() < 0.7 ? "rgba(139,118,80,0.8)" : "rgba(104,150,70,0.6)";
+    t.beginPath();
+    t.ellipse(x, y, rad * 1.2, rad, r() * 3, 0, Math.PI * 2);
+    t.fill();
+  }
+  // grain de la terre : une multitude de petits points clairs et sombres
+  const tones = ["rgba(205,186,146,0.55)", "rgba(222,205,168,0.45)", "rgba(96,76,48,0.45)", "rgba(120,98,64,0.4)", "rgba(80,62,40,0.3)"];
+  for (let i = 0; i < 150; i++) {
+    const x = (r() - 0.5) * C;
+    const y = (r() - 0.5) * C;
+    if (dist(x, y) > -2) continue;
+    t.fillStyle = tones[Math.floor(r() * tones.length)];
+    const s = 0.6 + r() * 1.4;
+    t.fillRect(x, y, s, s * (0.6 + r() * 0.8));
+  }
+  // les ornières, un peu irrégulières, avec un reflet de terre humide
+  const rut = (x0: number, y0: number, x1: number, y1: number, wob: number) => {
+    const mx = (x0 + x1) / 2 + wob * (Math.abs(y1 - y0) > Math.abs(x1 - x0) ? 1 : 0);
+    const my = (y0 + y1) / 2 + wob * (Math.abs(x1 - x0) > Math.abs(y1 - y0) ? 1 : 0);
+    t.strokeStyle = "rgba(72,54,32,0.5)";
+    t.lineWidth = 3.2;
+    t.lineCap = "round";
+    t.beginPath();
+    t.moveTo(x0, y0);
+    t.quadraticCurveTo(mx, my, x1, y1);
+    t.stroke();
+    t.strokeStyle = "rgba(190,170,130,0.35)";
+    t.lineWidth = 1.2;
+    t.beginPath();
+    t.moveTo(x0 + (y0 === y1 ? 0 : 2), y0 + (y0 === y1 ? 2 : 0));
+    t.quadraticCurveTo(mx + (y0 === y1 ? 0 : 2), my + (y0 === y1 ? 2 : 0), x1 + (y0 === y1 ? 0 : 2), y1 + (y0 === y1 ? 2 : 0));
+    t.stroke();
+  };
+  const o = 0.17 * C;
+  const L = C / 2;
+  const horiz = mask & 10;
+  const vert = mask & 5;
+  for (const s of [-o, o]) {
+    const wob = (r() - 0.5) * 4;
+    if (horiz) rut(mask & 8 ? -L : 0, s, mask & 2 ? L : 0, s, wob);
+    if (vert) rut(s, mask & 1 ? -L : 0, s, mask & 4 ? L : 0, wob);
+    if (!horiz && !vert) rut(-6, s, 6, s, 0);
+  }
+  // l'herbe qui pousse entre les ornières
+  for (let i = 0; i < 5; i++) {
+    const x = (r() - 0.5) * 0.3 * C;
+    const y = (r() - 0.5) * 0.3 * C;
+    if (dist(x, y) > -3) continue;
+    t.strokeStyle = "rgba(98,146,62,0.75)";
+    t.lineWidth = 1.2;
+    t.beginPath();
+    t.moveTo(x, y + 2);
+    t.lineTo(x + (r() - 0.5) * 3, y - 2 - r() * 3);
+    t.stroke();
+  }
+  // cailloux
+  const stones = ["#7e7a70", "#9a9488", "#b8b0a0", "#6d5a40", "#cfc6b0"];
+  for (let i = 0; i < 7; i++) {
+    const x = (r() - 0.5) * C * 0.9;
+    const y = (r() - 0.5) * C * 0.9;
+    if (dist(x, y) > -3) continue;
+    const rad = 0.9 + r() * 2;
+    t.fillStyle = "rgba(30,20,8,0.28)";
+    t.beginPath();
+    t.ellipse(x + 0.8, y + 1.1, rad * 1.2, rad, 0, 0, Math.PI * 2);
+    t.fill();
+    t.fillStyle = stones[Math.floor(r() * stones.length)];
+    t.beginPath();
+    t.ellipse(x, y, rad * 1.2, rad, r() * 3, 0, Math.PI * 2);
+    t.fill();
+  }
+  roadTiles.set(key, cv);
+  return cv;
+}
+
+// Les autres styles de chemins (au choix dans ☰ Menu).
+function drawRoadsAlt(g: CanvasRenderingContext2D, style: string, cells: [number, number][], has: (gx: number, gy: number) => boolean, stub: (gx: number, gy: number) => number) {
+  const hashOf = (gx: number, gy: number, k = 0) => {
+    let h = (gx * 73856093) ^ (gy * 19349663) ^ (k * 83492791);
+    return () => {
+      h = Math.imul(h ^ (h >>> 15), 2246822507) ^ Math.imul(h ^ (h >>> 13), 3266489909);
+      return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+    };
+  };
+  g.lineCap = "round";
+  g.lineJoin = "round";
+  const segments = (width: number, color: string, dx = 0, dy = 0, off = 0) => {
+    g.save();
+    g.translate(dx, dy);
+    g.strokeStyle = color;
+    g.lineWidth = width * C;
+    g.beginPath();
+    for (const [gx, gy] of cells) {
+      const x = (gx + 0.5) * C;
+      const y = (gy + 0.5) * C;
+      if (!off) {
+        g.moveTo(x, y);
+        g.lineTo(x + 0.01, y);
+      }
+      if (has(gx + 1, gy)) for (const o of off ? [-off, off] : [0]) { g.moveTo(x, y + o * C); g.lineTo(x + C, y + o * C); }
+      if (has(gx, gy + 1)) for (const o of off ? [-off, off] : [0]) { g.moveTo(x + o * C, y); g.lineTo(x + o * C, y + C); }
+
+    const sb = stub(gx, gy);
+    if (sb) {
+      for (const [bit, dx, dy] of [[1, 0, -1], [2, 1, 0], [4, 0, 1], [8, -1, 0]] as [number, number, number][]) {
+        if (!(sb & bit)) continue;
+        for (const o of (off ? [-off, off] : [0])) {
+          if (dx === 0) { g.moveTo(x + o * C, y); g.lineTo(x + o * C, y + (dy * C) / 2); }
+          else { g.moveTo(x, y + o * C); g.lineTo(x + (dx * C) / 2, y + o * C); }
+        }
+      }
+    }
+    }
+    g.stroke();
+    g.restore();
+  };
+  if (style === "realiste") {
+    // la bande de terre : bords doux en plusieurs couches, puis chaque case reçoit sa texture
+    segments(1.0, "rgba(120,140,70,0.14)");
+    segments(0.9, "rgba(130,122,72,0.24)");
+    segments(0.76, "#8b7650");
+    segments(0.68, "#a28a62");
+    for (const [gx, gy] of cells) {
+      const mask = (has(gx, gy - 1) ? 1 : 0) | (has(gx + 1, gy) ? 2 : 0) | (has(gx, gy + 1) ? 4 : 0) | (has(gx - 1, gy) ? 8 : 0) | stub(gx, gy);
+      g.drawImage(roadTile(mask, hashOf(gx, gy, 12)() < 0.5 ? 0 : hashOf(gx, gy, 13)() < 0.5 ? 1 : 2), gx * C, gy * C, C, C);
+    }
+    return;
+  }
+  if (style === "poudre") {
+    // une piste nette de terre claire aux bords doux
+    segments(1.0, "rgba(176,170,96,0.30)");
+    segments(0.86, "#cdbf94");
+    segments(0.72, "#d6c9a0");
+    segments(0.5, "#dcd0aa");
+    for (const [gx, gy] of cells) {
+      const r = hashOf(gx, gy, 2);
+      for (let i = 0; i < 2; i++) {
+        g.fillStyle = "rgba(255,250,225,0.35)";
+        g.beginPath();
+        g.ellipse((gx + 0.2 + r() * 0.6) * C, (gy + 0.2 + r() * 0.6) * C, (0.07 + r() * 0.08) * C, (0.04 + r() * 0.05) * C, r() * 3, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+  } else if (style === "traces") {
+    // presque rien : deux traces de roues qui usent l'herbe, avec la bande du milieu un peu éclaircie
+    segments(0.5, "rgba(158,176,92,0.45)");
+    segments(0.1, "rgba(122,98,62,0.85)", 0, 0, 0.19);
+    segments(0.05, "rgba(86,66,40,0.55)", 0, 0, 0.19);
+    for (const [gx, gy] of cells) {
+      const r = hashOf(gx, gy, 4);
+      if (r() < 0.7) {
+        g.fillStyle = ["#8f8c80", "#a8a292", "#7d6a4c"][Math.floor(r() * 3)];
+        g.beginPath();
+        g.ellipse((gx + 0.25 + r() * 0.5) * C, (gy + 0.2 + r() * 0.6) * C, (0.02 + r() * 0.025) * C, (0.015 + r() * 0.02) * C, r() * 3, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+  } else if (style === "pave") {
+    // des pavés de pierre irréguliers, la mousse sur les bords
+    for (const [gx, gy] of cells) {
+      const r = hashOf(gx, gy, 6);
+      const edge = (dx: number, dy: number) => !has(gx + dx, gy + dy);
+      g.fillStyle = "rgba(30,30,20,0.20)";
+      g.fillRect(gx * C + 5, gy * C + 7, C - 6, C - 6);
+      for (let j = 0; j < 4; j++) {
+        for (let i = 0; i < 4; i++) {
+          const border = (i === 0 && edge(-1, 0)) || (i === 3 && edge(1, 0)) || (j === 0 && edge(0, -1)) || (j === 3 && edge(0, 1));
+          if (border && r() < 0.4) continue;
+          const tone = 128 + Math.floor(r() * 42);
+          const sx = gx * C + i * 16 + (r() - 0.5) * 2;
+          const sy = gy * C + j * 16 + (r() - 0.5) * 2;
+          g.fillStyle = `rgb(${tone},${tone - 4},${tone - 14})`;
+          g.beginPath();
+          g.roundRect(sx + 1, sy + 1, 13.5 + (r() - 0.5) * 2, 13.5 + (r() - 0.5) * 2, 4);
+          g.fill();
+          g.strokeStyle = "rgba(50,45,35,0.55)";
+          g.lineWidth = 1;
+          g.stroke();
+        }
+      }
+      for (let i = 0; i < 2; i++) {
+        g.fillStyle = "rgba(96,140,64,0.35)";
+        g.beginPath();
+        g.ellipse((gx + r()) * C, (gy + r()) * C, (0.05 + r() * 0.07) * C, (0.04 + r() * 0.05) * C, r() * 3, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+  } else {
+    // une passerelle de planches posées en travers
+    segments(0.78, "rgba(20,12,4,0.28)", 2, 3);
+    segments(0.78, "#5a3d1c");
+    for (const [gx, gy] of cells) {
+      const r = hashOf(gx, gy, 8);
+      const horiz = has(gx - 1, gy) || has(gx + 1, gy);
+      const vert = has(gx, gy - 1) || has(gx, gy + 1);
+      const drawPlanks = (alongX: boolean) => {
+        for (let k = 0; k < 6; k++) {
+          const tone = 122 + Math.floor(r() * 30);
+          g.fillStyle = `rgb(${tone + 24},${tone - 8},${tone - 52})`;
+          const p = k * (C / 6);
+          if (alongX) g.fillRect(gx * C + p + 0.6, gy * C + 0.13 * C, C / 6 - 1.2, 0.74 * C);
+          else g.fillRect(gx * C + 0.13 * C, gy * C + p + 0.6, 0.74 * C, C / 6 - 1.2);
+        }
+      };
+      if (horiz || !vert) drawPlanks(true);
+      if (vert) drawPlanks(false);
+      g.fillStyle = "#2f1d0e"; // clous
+      for (const [nx, ny] of [[0.2, 0.2], [0.8, 0.2], [0.2, 0.8], [0.8, 0.8]]) g.fillRect((gx + nx) * C - 1, (gy + ny) * C - 1, 2, 2);
+    }
+    segments(0.04, "#2f1d0e", 0, 0, 0.37);
+  }
+}
+
+// Les chemins du thème viking : une piste discrète d'herbe usée et de terre claire, qui serpente (les tronçons se courbent et leur largeur varie),
+// avec des plaques d'herbe qui repoussent, quelques cailloux et des brins d'herbe sur les bords.
+function drawRoadsPainted(g: CanvasRenderingContext2D, has: (gx: number, gy: number) => boolean, cells: [number, number][], stub: (gx: number, gy: number) => number) {
+  const style = getRoadStyle();
+  if (style !== "terre") return drawRoadsAlt(g, style, cells, has, stub);
+  const hashOf = (gx: number, gy: number, k = 0) => {
+    let h = (gx * 73856093) ^ (gy * 19349663) ^ (k * 83492791);
+    return () => {
+      h = Math.imul(h ^ (h >>> 15), 2246822507) ^ Math.imul(h ^ (h >>> 13), 3266489909);
+      return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+    };
+  };
+  // le centre de chaque case est décalé un peu (le même pour tous les tronçons qui y arrivent)
+  const centre = (gx: number, gy: number): [number, number] => {
+    const r = hashOf(gx, gy, 3);
+    return [(gx + 0.5 + (r() - 0.5) * 0.12) * C, (gy + 0.5 + (r() - 0.5) * 0.12) * C];
+  };
+  interface Seg {
+    ax: number;
+    ay: number;
+    cx: number;
+    cy: number;
+    bx: number;
+    by: number;
+    wf: number;
+  }
+  const segs: Seg[] = [];
+  const dots: { x: number; y: number; wf: number }[] = [];
+  for (const [gx, gy] of cells) {
+    const [ax, ay] = centre(gx, gy);
+    dots.push({ x: ax, y: ay, wf: 0.8 + hashOf(gx, gy, 5)() * 0.4 });
+    const sb = stub(gx, gy); // le chemin se prolonge jusqu'à la porte du bâtiment
+    for (const [bit, dx, dy] of [[1, 0, -1], [2, 1, 0], [4, 0, 1], [8, -1, 0]] as [number, number, number][]) {
+      if (sb & bit) segs.push({ ax, ay, cx: ax + (dx * C) / 4, cy: ay + (dy * C) / 4, bx: ax + (dx * C) / 2, by: ay + (dy * C) / 2, wf: 1 });
+    }
+    for (const [dx, dy] of [[1, 0], [0, 1]]) {
+      if (!has(gx + dx, gy + dy)) continue;
+      const [bx, by] = centre(gx + dx, gy + dy);
+      const r = hashOf(gx * 2 + dx, gy * 2 + dy, 9);
+      const off = (r() - 0.5) * 0.12 * C; // le tronçon se courbe très légèrement de côté
+      const mx = (ax + bx) / 2;
+      const my = (ay + by) / 2;
+      const nx = -(by - ay);
+      const ny = bx - ax;
+      const nl = Math.hypot(nx, ny) || 1;
+      segs.push({ ax, ay, cx: mx + (nx / nl) * off, cy: my + (ny / nl) * off, bx, by, wf: 0.8 + r() * 0.4 });
+    }
+  }
+  g.lineCap = "round";
+  const pass = (color: string, width: number) => {
+    g.strokeStyle = color;
+    g.fillStyle = color;
+    for (const s of segs) {
+      g.lineWidth = width * C * s.wf;
+      g.beginPath();
+      g.moveTo(s.ax, s.ay);
+      g.quadraticCurveTo(s.cx, s.cy, s.bx, s.by);
+      g.stroke();
+    }
+    for (const d of dots) {
+      g.beginPath();
+      g.arc(d.x, d.y, (width * C * d.wf) / 2, 0, Math.PI * 2);
+      g.fill();
+    }
+  };
+  pass("#a9b46a", 0.94); // transition : l'herbe usée
+  pass("#b3a572", 0.76); // la terre
+  pass("#bdac7e", 0.54); // le milieu, plus clair
+  // plaques claires, plaques d'herbe qui repoussent, cailloux, brins d'herbe
+  const tones = ["#8f8c80", "#a8a292", "#bdb5a2", "#7d6a4c"];
+  for (const [gx, gy] of cells) {
+    const r = hashOf(gx, gy, 11);
+    const [cx, cy] = centre(gx, gy);
+    for (let i = 0; i < 3; i++) {
+      g.fillStyle = r() < 0.5 ? "rgba(214,196,150,0.30)" : "rgba(120,100,62,0.16)";
+      g.beginPath();
+      g.ellipse(cx + (r() - 0.5) * 0.6 * C, cy + (r() - 0.5) * 0.6 * C, (0.08 + r() * 0.12) * C, (0.05 + r() * 0.08) * C, r() * 3, 0, Math.PI * 2);
+      g.fill();
+    }
+    if (r() < 0.55) { // l'herbe qui repousse au milieu : le chemin est irrégulier
+      g.fillStyle = "rgba(140,180,84,0.5)";
+      g.beginPath();
+      g.ellipse(cx + (r() - 0.5) * 0.5 * C, cy + (r() - 0.5) * 0.5 * C, (0.07 + r() * 0.1) * C, (0.04 + r() * 0.06) * C, r() * 3, 0, Math.PI * 2);
+      g.fill();
+    }
+    for (let i = 0; i < 2; i++) {
+      const x = cx + (r() - 0.5) * 0.7 * C;
+      const y = cy + (r() - 0.5) * 0.7 * C;
+      const rad = (0.02 + r() * 0.03) * C;
+      g.fillStyle = "rgba(30,20,8,0.22)";
+      g.beginPath();
+      g.ellipse(x + 1, y + 1.2, rad * 1.3, rad, 0, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = tones[Math.floor(r() * tones.length)];
+      g.beginPath();
+      g.ellipse(x, y, rad * 1.3, rad, r() * 3, 0, Math.PI * 2);
+      g.fill();
+    }
+    if (r() < 0.6) {
+      g.strokeStyle = "#5f9442";
+      g.lineWidth = 1.6;
+      const bx = cx + (r() - 0.5) * 0.95 * C;
+      const by = cy + (r() - 0.5) * 0.95 * C;
+      for (let b = -1; b <= 1; b++) {
+        g.beginPath();
+        g.moveTo(bx + b * 3, by + 3);
+        g.lineTo(bx + b * 4.5, by - 3.5 - r() * 3);
+        g.stroke();
+      }
+    }
+  }
+}
+
+export function drawRoads(g: CanvasRenderingContext2D, roads: Record<number, 1>, grid: number, view: { x0: number; y0: number; x1: number; y1: number }, entrances: [number, number, number][] = []) {
   const gx0 = Math.max(0, Math.floor(view.x0 / C) - 1);
   const gx1 = Math.min(grid - 1, Math.floor(view.x1 / C) + 1);
   const gy0 = Math.max(0, Math.floor(view.y0 / C) - 1);
   const gy1 = Math.min(grid - 1, Math.floor(view.y1 / C) + 1);
   const cells: [number, number][] = [];
   for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) if (roads[gy * grid + gx]) cells.push([gx, gy]);
+  // thème viking : devant chaque porte, un peu de terre battue, même sans chemin, pour que l'entrée se voie toujours
+  const aprons = new Set<number>();
+  const stubs = new Map<number, number>(); // côté du bâtiment, pour chaque case de porte : le chemin se prolonge jusqu'à la porte
+  if (isViking()) {
+    for (const [ex, ey, rot] of entrances) {
+      if (ex < gx0 || ex > gx1 || ey < gy0 || ey > gy1) continue;
+      const k = ey * grid + ex;
+      stubs.set(k, ((stubs.get(k) ?? 0) | [1, 2, 4, 8][((rot % 4) + 4) % 4]));
+      if (roads[k] || aprons.has(k)) continue;
+      aprons.add(k);
+      cells.push([ex, ey]);
+    }
+  }
   if (!cells.length) return;
   g.lineCap = "round";
   g.lineJoin = "round";
+  if (isViking()) return drawRoadsPainted(g, (gx, gy) => gx >= 0 && gy >= 0 && gx < grid && gy < grid && (!!roads[gy * grid + gx] || aprons.has(gy * grid + gx)), cells, (gx, gy) => stubs.get(gy * grid + gx) ?? 0);
   const passes: [string, number, number][] = [
     ["rgba(110,140,50,0.28)", 1.04, 0], // lisière : l'herbe piétinée autour du chemin
     ["rgba(60,40,10,0.22)", 0.86, 1],
@@ -2086,6 +2876,9 @@ export function drawStructureThumb(canvas: HTMLCanvasElement, id: string) {
     else if (def.kind === "farm") drawFarm(g, 0, 0);
     else if (def.kind === "stable") drawStable(g, 0, 0, 0, [{ eat: 0, drink: 0 }, { eat: 0, drink: 0 }]);
     else if (def.kind === "market") drawMarket(g, 0, 0, 0, true);
+    else if (def.kind === "shipyard") drawShipyard(g, 0, 0, 0, 4);
+    else if (def.kind === "tavern") drawTavern(g, 0, 0, 0, true);
+    else if (def.kind === "pantry") drawDepot(g, 0, 0, 0, 1, true);
     else if (def.kind === "pigpen") drawPigpen(g, 0, 0, 0, [{ age: 300, eat: 0, drink: 0 }, { age: 100, eat: 0, drink: 0 }, { age: 300, eat: 0, drink: 0 }]);
     else drawDepot(g, 0, 0);
   }
@@ -2118,8 +2911,8 @@ export function drawEntrance(g: CanvasRenderingContext2D, gx: number, gy: number
 
 // Chantier : fondations posées, puis le bâtiment qui monte à mesure que la construction avance.
 // have/need : bois livré ; progress : de 0 à 1 une fois les matériaux réunis.
-export function drawSite(g: CanvasRenderingContext2D, kind: "camp" | "depot" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market", gx: number, gy: number, have: number, need: number, progress: number, t: number, rot = 0, undo = false, plank = false) {
-  const size = kind === "farm" ? 5 : kind === "stable" || kind === "pigpen" ? 4 : kind === "depot" || kind === "sawmill" || kind === "butcher" || kind === "port" || kind === "church" ? 3 : 2;
+export function drawSite(g: CanvasRenderingContext2D, kind: "camp" | "depot" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market" | "shipyard" | "tavern" | "pantry", gx: number, gy: number, have: number, need: number, progress: number, t: number, rot = 0, undo = false, plank = false) {
+  const size = kind === "farm" ? 5 : kind === "shipyard" ? 6 : kind === "stable" || kind === "pigpen" ? 4 : kind === "depot" || kind === "pantry" || kind === "sawmill" || kind === "butcher" || kind === "port" || kind === "church" || kind === "market" || kind === "tavern" ? 3 : 2;
   const x = gx * C;
   const y = gy * C;
   const w = size * C;
@@ -2160,6 +2953,9 @@ export function drawSite(g: CanvasRenderingContext2D, kind: "camp" | "depot" | "
     else if (kind === "stable") drawStable(g, gx, gy, rot);
     else if (kind === "pigpen") drawPigpen(g, gx, gy, rot);
     else if (kind === "market") drawMarket(g, gx, gy, rot);
+    else if (kind === "shipyard") drawShipyard(g, gx, gy, rot);
+    else if (kind === "tavern") drawTavern(g, gx, gy, rot);
+    else if (kind === "pantry") drawDepot(g, gx, gy, rot, 1, true);
     else drawDepot(g, gx, gy, rot);
     g.restore();
     g.globalAlpha = 1;

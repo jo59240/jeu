@@ -25,6 +25,10 @@
     .modal .modalBox { background:var(--paper); border:3px solid var(--ink); border-radius:18px; box-shadow:0 8px 0 rgba(0,0,0,.25); max-width:1120px; width:100%; max-height:calc(100vh - 32px); display:flex; flex-direction:column; animation:pop .28s ease-out; }
     .modal .modalHead { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:2px dashed rgba(74,59,42,.35); font-weight:700; font-size:20px; }
     .modal .modalSub { font-size:14px; opacity:.65; font-weight:600; flex:1; }
+    .modal .pStep { display:inline-flex; align-items:center; gap:5px; }
+    .modal .pStep button { width:26px; height:26px; padding:0; font-size:16px; line-height:1; }
+    .modal .pStep b { min-width:30px; text-align:center; font-variant-numeric:tabular-nums; }
+    .modal .portNote { margin:4px 2px 8px; font-size:13px; opacity:.8; line-height:1.4; }
     .modal .modalBody { overflow:auto; padding:6px 10px 12px; }
     .modal table { width:100%; border-collapse:collapse; font-size:13px; }
     .modal th { position:sticky; top:0; background:var(--paper); text-align:left; padding:8px 6px; cursor:pointer; user-select:none; white-space:nowrap; border-bottom:2px solid rgba(74,59,42,.35); }
@@ -57,6 +61,9 @@
     .modal #helpArt b { color:#2f6e3a; }
     @media (max-width:640px) { .modal .helpBody { flex-direction:column; } .modal #helpNav { width:auto; flex-direction:row; flex-wrap:wrap; border-right:0; border-bottom:2px dashed rgba(74,59,42,.3); max-height:38%; } #helpBtn { right:104px; } }
     #lostBanner { position:fixed; top:64px; left:50%; transform:translateX(-50%); z-index:30; font-weight:700; background:#f1d3c4; }
+    .modal #winBody p { margin:0 0 4px; line-height:1.5; }
+    .modal #winBody .lostBig { font-size:20px; font-weight:700; }
+    .modal #winBody .lostRow { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
     .modal #lostBody p { margin:0 0 4px; line-height:1.5; }
     .modal #lostBody .lostBig { font-size:20px; font-weight:700; }
     .modal #lostBody .lostTip { font-size:13px; opacity:.7; }
@@ -303,10 +310,22 @@
   <div id="cellInfo"></div>
   <button id="buildBtn" class="round">🔨 Construire</button>
 
+  <div id="portModal" class="modal" hidden>
+    <div class="modalBox">
+      <div class="modalHead"><span>⚓ Port</span><span class="modalSub" id="portSub"></span><button id="portClose" class="round">✕ Fermer</button></div>
+      <div class="modalBody" id="portBody"></div>
+    </div>
+  </div>
   <div id="folkModal" class="modal" hidden>
     <div class="modalBox">
       <div class="modalHead"><span>👥 Villageois</span><span class="modalSub" id="folkSub"></span><button id="folkClose" class="round">✕ Fermer</button></div>
       <div class="modalBody" id="folkBody"></div>
+    </div>
+  </div>
+  <div id="winModal" class="modal" hidden>
+    <div class="modalBox menuBox">
+      <div class="modalHead"><span id="winTitle"></span></div>
+      <div class="mList" id="winBody"></div>
     </div>
   </div>
   <div id="lostModal" class="modal" hidden>

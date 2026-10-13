@@ -7,12 +7,13 @@
 //
 // Un personnage ne traverse pas les bâtiments : il s'arrête à côté (les chemins sont calculés par le jeu).
 import { isViking, vn } from "./theme";
+import { furShade } from "./painted";
 import { healSkill } from "./state";
 import { C } from "./draw";
 import { CARRY_MAX, CREW_COLORS, FEMALE_NAMES, FOOD_MAX, HAUL_MAX, HUNT_CARRY, HaulDest, WATER_MAX, WorkerSave, haulDest } from "./state";
 import { objects, T, terrainAt } from "./world";
 import { Zone } from "./zone";
-import { HARVEST_MAX, HARVEST_MIN, HARVEST_SEC, TEND_BELOW, TEND_SEC } from "./balance";
+import { RECIPES, HARVEST_MAX, HARVEST_MIN, HARVEST_SEC, TEND_BELOW, TEND_SEC } from "./balance";
 import { NIGHT_DRAIN, NIGHT_IDLE_HOME, NIGHT_REST, SPEED, CHOP_SECONDS, LOAD_SECONDS, HUNT_RANGE, AIM_SECONDS, IDLE_HOME_SEC, DRAIN, REST_RATE, IDLE_RATE, TIRED, EXHAUSTED, WAKE_AT, NEED_GO, NEED_BAD, BERRY_CARRY, BERRY_PICK_SEC, BREW_SEC, ExportGood, ILLNESSES, SICK_BED, SICK_SLOW, AGE_ELDER, FARM_CROPS, FarmCrop, SOW_SEC, REAP_SEC } from "./balance";
 
 
@@ -25,6 +26,7 @@ export type HealPlan =
   | { type: "treat"; target: Cell; patientId: number; prevent?: boolean } // aller soigner ce malade
   | { type: "brew"; target: Cell } // préparer un remède sur place
   | { type: "fetch"; target: Cell; depotId: number; good: "berries" | "honey" } // aller chercher des ingrédients dans un dépôt
+  | { type: "bush"; target: Cell; idx: number } // cueillir des baies sur un arbuste sauvage
   | { type: "stock"; target: Cell }; // ranger ce qu'on porte dans le stock de la maison
 
 // Une étape du travail du fossoyeur.
@@ -58,6 +60,15 @@ export type SwinePlan =
   | { type: "pour"; target: Cell } // la verser dans l'abreuvoir
   | { type: "slaughter"; target: Cell } // abattre un cochon adulte
   | { type: "deliver"; target: Cell; depotId: number }; // ranger la viande au dépôt
+
+// Une étape du travail du cuisinier.
+export type CookPlan =
+  | { type: "fetch"; target: Cell; depotId: number; good: ExportGood } // prendre des ingrédients au dépôt
+  | { type: "stock"; target: Cell } // les ranger au garde-manger de la taverne
+  | { type: "cook"; target: Cell; recipe: string }; // préparer un plat (il entre en cuisine)
+
+// Un villageois qui va manger à la taverne.
+export type DinePlan = { type: "eat"; target: Cell };
 
 export interface WorkerEnv {
   findPath(from: Cell, to: Cell, self: Worker): [number, number][] | null; // contourne les personnages immobiles
@@ -96,6 +107,13 @@ export interface WorkerEnv {
   stableInfo(stableId: number): boolean; // false : l'étable n'existe plus
   stablePlan(stableId: number, from: Cell, w: Worker): StablePlan | null;
   stableDo(plan: StablePlan, w: Worker): void;
+
+  // cuisinier : rapporter les ingrédients et préparer les plats ; convive : manger à la taverne
+  tavernInfo(tavernId: number): boolean;
+  tavernPlan(tavernId: number, from: Cell, w: Worker): CookPlan | null;
+  tavernDo(plan: CookPlan, w: Worker): void;
+  dinePlan(tavernId: number, from: Cell, w: Worker): DinePlan | null;
+  dineDo(plan: DinePlan, w: Worker): void;
 
   // porcher : nourrir et abreuver les cochons, les abattre, ranger la viande
   pigInfo(pigpenId: number): boolean; // false : la porcherie n'existe plus
@@ -217,7 +235,9 @@ export class Worker {
   private resumeGoal: Cell | null = null; // destination à rejoindre après s'être écarté pour laisser passer
   private warned = false; // il a déjà prévenu pour ce blocage
   private idleT = 0; // depuis combien de temps il ne fait rien
-  private stallTask: StablePlan | SwinePlan | null = null; // éleveur : l'étape en cours
+  private healCheckT = 0; // le soigneur en route chercher des ingrédients regarde de temps en temps si un malade l'attend
+  private cookSec = 5; // durée de la préparation en cours
+  private stallTask: StablePlan | SwinePlan | CookPlan | DinePlan | null = null; // éleveur : l'étape en cours
   private farmTask: FarmPlan | null = null; // fermier : l'étape en cours
   private buryTask: BuryPlan | null = null; // fossoyeur : l'étape en cours
   private healTask: HealPlan | null = null; // soigneur : l'étape en cours
@@ -298,6 +318,7 @@ export class Worker {
       if (!d.job || d.job.type !== "water") return `Corvée d'eau${carry}`;
       if (this.buildBlock === "noRoad") return "Corvée d'eau · il faut un chemin entre le puits et sa maison";
       if (this.waiting) return `Corvée · attend (source vide) · ${d.job.hauled} livrées${carry}`;
+      if (d.job.dine !== undefined) return this.state === "stalling" ? "Mange à la taverne" : "Va manger à la taverne";
       return `Va chercher ${d.job.food ? "à manger" : "de l'eau"} pour sa maison${d.resume ? ", puis reprendra son travail" : ""} · ${d.job.hauled} livrées${carry}`;
     }
     if (d.visit) return d.inside ? "Boit et mange chez lui" : "Rentre boire ou manger";
@@ -371,7 +392,7 @@ export class Worker {
   }
 
   // Change de métier : la tenue change, et le travail en cours s'arrête.
-  setRole(role: "none" | "wood" | "haul" | "build" | "water" | "hunt" | "bee" | "craft" | "gather" | "heal" | "bury" | "farm" | "tend" | "swine", env: WorkerEnv) {
+  setRole(role: "none" | "wood" | "haul" | "build" | "water" | "hunt" | "bee" | "craft" | "gather" | "heal" | "bury" | "farm" | "tend" | "swine" | "cook", env: WorkerEnv) {
     this.leave(env);
     this.data.resume = undefined;
     this.data.resting = false;
@@ -436,6 +457,11 @@ export class Worker {
   }
 
   // Le soigneur prépare un remède : il est entré dans sa maison, on ne le voit plus.
+  // Cet arbuste est-il à oublier (inaccessible pour lui) ?
+  skipsBush(idx: number) {
+    return this.ignore.has(idx);
+  }
+
   get brewing() {
     return this.state === "healing" && this.healTask?.type === "brew";
   }
@@ -453,6 +479,41 @@ export class Worker {
     this.state = "idle";
     this.path = [];
     env.changed();
+  }
+
+  // Devient cuisinier de cette taverne : il rapporte les ingrédients des dépôts et prépare les plats.
+  startCook(tavernId: number, env: WorkerEnv) {
+    this.leave(env);
+    this.data.resume = undefined;
+    this.data.resting = false;
+    this.releaseTree(env);
+    this.data.role = "cook";
+    this.resetWait();
+    this.data.job = { type: "cook", tavernId, cooked: 0 };
+    this.stallTask = null;
+    this.state = "idle";
+    this.path = [];
+    env.changed();
+  }
+
+  // Il va manger à la taverne : il met son travail de côté (comme pour une corvée) et le reprendra ensuite.
+  startDine(tavernId: number, env: WorkerEnv) {
+    const before = this.data.job && this.data.job.type !== "water" ? { role: this.data.role, job: this.data.job } : this.data.resume;
+    this.leave(env);
+    this.releaseTree(env);
+    this.data.role = "water";
+    this.resetWait();
+    this.data.job = { type: "water", houseId: this.data.home ?? 0, hauled: 0, dine: tavernId };
+    this.data.resume = before;
+    this.stallTask = null;
+    this.state = "idle";
+    this.path = [];
+    env.changed();
+  }
+
+  // Le cuisinier est entré en cuisine : on ne le voit plus.
+  get cooking() {
+    return this.state === "stalling" && this.data.job?.type === "cook" && this.stallTask?.type === "cook";
   }
 
   // Devient porcher de cette porcherie : il nourrit et abreuve les cochons, les abat sur ordre et range la viande au dépôt.
@@ -682,6 +743,20 @@ export class Worker {
     }
     // il est inactif s'il n'a pas de travail, ou s'il attend (du bois, des arbres…) : au bout d'un moment il rentre
     if (this.path.length || this.state !== "idle" || (this.data.job && !this.waiting)) this.idleT = 0;
+    // le soigneur en route chercher des baies ou du miel : un malade qu'il peut soigner avec ce qu'il a déjà prêt passe avant
+    if (this.state === "toHeal" && this.path.length && (this.healTask?.type === "fetch" || this.healTask?.type === "bush") && this.data.job?.type === "heal") {
+      this.healCheckT -= dt;
+      if (this.healCheckT <= 0) {
+        this.healCheckT = 1;
+        const next = env.healPlan(this.data.job.clinicId, this.cell, this);
+        if (next && (next.type === "grab" || next.type === "treat")) {
+          this.healTask = null;
+          this.path = [];
+          this.state = "idle"; // il abandonne la course : il repart soigner
+          env.changed();
+        }
+      }
+    }
     if (this.state === "toPrey") this.trackPrey(dt, env);
     if (this.path.length) {
       this.repathT = Math.max(0, this.repathT - dt);
@@ -745,13 +820,17 @@ export class Worker {
     if (this.state === "stalling") {
       this.timer += dt;
       const plan = this.stallTask;
-      if (this.timer < (plan?.type === "milk" ? 2.6 : plan?.type === "slaughter" ? 3 : 1.8)) return;
+      if (this.timer < (plan?.type === "milk" ? 2.6 : plan?.type === "slaughter" ? 3 : plan?.type === "eat" ? 3.5 : plan?.type === "cook" ? this.cookSec : 1.8)) return;
       this.state = "idle";
       this.stallTask = null;
+      const sj = this.data.job;
       if (plan) {
-        if (this.data.job?.type === "swine") env.pigDo(plan as SwinePlan, this);
+        if (sj?.type === "swine") env.pigDo(plan as SwinePlan, this);
+        else if (sj?.type === "cook") env.tavernDo(plan as CookPlan, this);
+        else if (sj?.type === "water" && sj.dine !== undefined) env.dineDo(plan as DinePlan, this);
         else env.stableDo(plan as StablePlan, this);
       }
+      if (sj?.type === "water" && sj.dine !== undefined) this.endErrand(env); // il a mangé : il reprend son travail
       env.changed();
       return;
     }
@@ -778,7 +857,7 @@ export class Worker {
     if (this.state === "healing") {
       this.timer += dt;
       const plan = this.healTask;
-      if (this.timer < (plan?.type === "brew" ? BREW_SEC * healSkill(this.data.xp ?? 0).brew : 2.2)) return;
+      if (this.timer < (plan?.type === "brew" ? BREW_SEC * healSkill(this.data.xp ?? 0).brew : plan?.type === "bush" ? BERRY_PICK_SEC : 2.2)) return;
       this.state = "idle";
       this.healTask = null;
       if (plan) env.healDo(plan, this);
@@ -891,6 +970,7 @@ export class Worker {
     else if (job.type === "farm") this.farmStep(env);
     else if (job.type === "tend") this.tendStep(env);
     else if (job.type === "swine") this.swineStep(env);
+    else if (job.type === "cook") this.cookStep(env);
     else this.waterStep(env);
   }
 
@@ -971,7 +1051,9 @@ export class Worker {
       if (!depot) return true; // il n'a plus de dépôt : il sort le constater
       return depot.free > 0 && env.haulRoute(job.depotId, this.data.carry === 0, haulDest(job)).ok;
     }
+    if (job.type === "water" && job.dine !== undefined) return env.dinePlan(job.dine, this.cell, this) !== null;
     if (job.type === "water") return env.waterTarget(job.houseId, this.data.carry === 0, job.food).ok;
+    if (job.type === "cook") return env.tavernInfo(job.tavernId) ? env.tavernPlan(job.tavernId, this.cell, this) !== null : true;
     if (job.type === "swine") return env.pigInfo(job.pigpenId) ? env.pigPlan(job.pigpenId, this.cell, this) !== null : true;
     if (job.type === "tend") return env.stableInfo(job.stableId) ? env.stablePlan(job.stableId, this.cell, this) !== null : true;
     if (job.type === "farm") return env.farmInfo(job.farmId) ? env.farmPlan(job.farmId, this.cell, this) !== null : true;
@@ -1018,6 +1100,8 @@ export class Worker {
     const what = d.cargo === "plank" ? "🪚" : d.cargo === "water" ? "💧" : d.cargo === "meat" ? "🍖" : d.cargo === "cuts" ? "🥩" : d.cargo === "honey" ? "🍯" : d.cargo === "berries" ? "🫐" : d.cargo === "tisane" ? "🍵" : d.cargo === "syrup" ? "🧪" : d.cargo === "body" ? "⚰️" : d.cargo === "milk" ? "🥛" : d.cargo && d.cargo in FARM_CROPS ? FARM_CROPS[d.cargo as FarmCrop].emoji : "🪵";
     const load = d.carry > 0 ? ` · ${d.carry} ${what}` : "";
     switch (job.type) {
+      case "cook":
+        return this.state === "stalling" ? (this.stallTask?.type === "cook" ? "Prépare un plat" : this.stallTask?.type === "fetch" ? "Prend des ingrédients" : "Range les ingrédients") : d.carry > 0 ? "Rapporte des ingrédients" : this.moving ? "Va chercher des ingrédients" : "Veille sur les fourneaux";
       case "swine":
         return this.state === "stalling" ? (this.stallTask?.type === "slaughter" ? "Abat un cochon" : this.stallTask?.type === "feed" ? "Remplit l'auge" : this.stallTask?.type === "pour" ? "Remplit l'abreuvoir" : this.stallTask?.type === "deliver" ? "Range la viande" : "Charge") : d.carry > 0 ? (d.cargo === "meat" ? `Porte la viande${load}` : d.cargo === "water" ? "Rapporte de l'eau" : "Rapporte des légumes") : this.moving ? "En tournée" : "Veille sur les cochons";
       case "tend":
@@ -1027,7 +1111,7 @@ export class Worker {
       case "bury":
         return this.state === "burying" ? (this.buryTask?.type === "inter" ? "Enterre un défunt" : "Prend un défunt") : d.carry > 0 ? "Porte un défunt à l'église" : this.moving ? "Va chercher un défunt" : "Veille sur le cimetière";
       case "heal":
-        return this.state === "healing" ? (this.healTask?.type === "brew" ? "Prépare un remède" : this.healTask?.type === "treat" ? (this.healTask.prevent ? "Donne une tisane préventive" : "Soigne un malade") : "S'occupe du stock") : d.carry > 0 ? (d.cargo === "tisane" || d.cargo === "syrup" ? "Porte un remède" : "Rapporte des ingrédients") : this.moving ? "En tournée" : "Attend un malade";
+        return this.state === "healing" ? (this.healTask?.type === "brew" ? "Prépare un remède" : this.healTask?.type === "treat" ? (this.healTask.prevent ? "Donne une tisane préventive" : "Soigne un malade") : this.healTask?.type === "bush" ? "Cueille des baies" : "S'occupe du stock") : d.carry > 0 ? (d.cargo === "tisane" || d.cargo === "syrup" ? "Porte un remède" : "Rapporte des ingrédients") : this.moving ? (this.healTask?.type === "bush" ? "Va cueillir des baies" : "En tournée") : "Attend un malade";
       case "gather":
         return this.state === "picking" ? "Cueille des baies" : d.carry > 0 ? `Rapporte des baies${load}` : this.moving ? "Va aux arbustes" : "Cherche des baies";
       case "bee":
@@ -1042,12 +1126,12 @@ export class Worker {
       case "wood":
         return this.state === "chopping" ? "Coupe un arbre" : this.state === "toCamp" ? `Porte le bois au camp${load}` : this.state === "toTree" ? "Va vers un arbre" : "Cherche un arbre";
       case "water":
-        return job.food ? "Va chercher à manger" : "Va chercher de l'eau";
+        return job.dine !== undefined ? (this.state === "stalling" ? "Mange à la taverne" : "Va manger à la taverne") : job.food ? "Va chercher à manger" : "Va chercher de l'eau";
     }
   }
 
   // Les bâtiments auxquels il est lié en ce moment (le menu d'un bâtiment liste ceux qui y travaillent).
-  involvedIn(): { kind: "camp" | "depot" | "sawmill" | "lodge" | "butcher" | "port" | "apiary" | "site" | "well" | "clinic" | "church" | "farm" | "stable" | "pigpen"; id: number }[] {
+  involvedIn(): { kind: "camp" | "depot" | "sawmill" | "lodge" | "butcher" | "port" | "apiary" | "site" | "well" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "tavern"; id: number }[] {
     const job = this.data.job;
     if (!job) return [];
     if (job.type === "hunt") return [{ kind: "lodge", id: job.lodgeId }];
@@ -1058,6 +1142,8 @@ export class Worker {
     if (job.type === "farm") return [{ kind: "farm", id: job.farmId }];
     if (job.type === "tend") return [{ kind: "stable", id: job.stableId }];
     if (job.type === "swine") return [{ kind: "pigpen", id: job.pigpenId }];
+    if (job.type === "cook") return [{ kind: "tavern", id: job.tavernId }];
+    if (job.type === "water" && job.dine !== undefined) return [{ kind: "tavern", id: job.dine }];
     if (job.type === "build") return [{ kind: "site", id: job.siteId }];
     if (job.type === "water") {
       if (this.waterWell < 0) return [];
@@ -1554,6 +1640,87 @@ export class Worker {
     }
   }
 
+  // ---------- cuisinier et convives ----------
+
+  // Boucle du cuisinier : le jeu choisit l'étape (rapporter un ingrédient, le ranger, préparer un plat).
+  private cookStep(env: WorkerEnv) {
+    const job = this.data.job;
+    if (!job || job.type !== "cook") return;
+    const here = this.cell;
+    const wait = (secs: number) => {
+      this.waiting = true;
+      this.waitT = secs;
+      this.state = "idle";
+    };
+    if (!env.tavernInfo(job.tavernId)) {
+      this.data.job = null; // la taverne a disparu
+      this.data.role = "none";
+      this.state = "idle";
+      env.notify(`${this.name} n'a plus de taverne.`);
+      env.changed();
+      return;
+    }
+    const plan = env.tavernPlan(job.tavernId, here, this);
+    if (!plan) {
+      wait(4);
+      return;
+    }
+    const path = here.gx === plan.target.gx && here.gy === plan.target.gy ? [] : env.findPath(here, plan.target, this);
+    if (!path) {
+      wait(3);
+      return;
+    }
+    this.waiting = false;
+    this.stallTask = plan;
+    if (plan.type === "cook") this.cookSec = RECIPES.find((r) => r.id === plan.recipe)?.cookSec ?? 5;
+    this.state = "toStall";
+    if (path.length) this.path = path;
+    else {
+      this.state = "stalling";
+      this.timer = 0;
+    }
+  }
+
+  // Boucle d'un villageois qui va manger à la taverne.
+  private dineStep(env: WorkerEnv) {
+    const job = this.data.job;
+    if (!job || job.type !== "water" || job.dine === undefined) return;
+    const here = this.cell;
+    const plan = env.dinePlan(job.dine, here, this);
+    if (!plan) {
+      this.endErrand(env);
+      return;
+    }
+    const path = here.gx === plan.target.gx && here.gy === plan.target.gy ? [] : env.findPath(here, plan.target, this);
+    if (!path) {
+      this.endErrand(env);
+      return;
+    }
+    this.waiting = false;
+    this.stallTask = plan;
+    this.state = "toStall";
+    if (path.length) this.path = path;
+    else {
+      this.state = "stalling";
+      this.timer = 0;
+    }
+  }
+
+  // Fin d'une course : il reprend ce qu'il faisait avant, sinon il redevient simple villageois.
+  private endErrand(env: WorkerEnv) {
+    const back = this.data.resume;
+    this.data.resume = undefined;
+    this.data.job = back?.job ?? null;
+    this.data.role = back?.role ?? "none";
+    this.finished = false;
+    this.ignore.clear();
+    this.resetWait();
+    this.stallTask = null;
+    this.state = "idle";
+    this.buildBlock = null;
+    env.changed();
+  }
+
   // ---------- porcher ----------
 
   // Boucle du porcher : le jeu choisit l'étape (ranger la viande, abattre, remplir l'auge ou l'abreuvoir).
@@ -1701,6 +1868,10 @@ export class Worker {
     }
     const path = here.gx === plan.target.gx && here.gy === plan.target.gy ? [] : env.findPath(here, plan.target, this);
     if (!path) {
+      if (plan.type === "bush") {
+        env.claimed.delete(plan.idx);
+        this.ignore.add(plan.idx); // arbuste inaccessible : il l'oublie
+      }
       wait(3);
       return;
     }
@@ -1884,6 +2055,10 @@ export class Worker {
   private waterStep(env: WorkerEnv) {
     const job = this.data.job;
     if (!job || job.type !== "water") return;
+    if (job.dine !== undefined) {
+      this.dineStep(env);
+      return;
+    }
     const here = this.cell;
     const wait = (secs: number) => {
       this.waiting = true;
@@ -2849,6 +3024,11 @@ export class Worker {
       g.beginPath();
       g.arc(0, 0, r * 0.4, 0, Math.PI * 2);
       g.stroke();
+    }
+    // réalisme : le tissu du vêtement (trame, lumière, ombre) et le feutre ou les cheveux de la tête
+    if (isViking()) {
+      furShade(g, 0, 0, r * 0.62, r * 0.98, this.data.id * 31 + 1, false, 0.9);
+      furShade(g, 0, 0, r * 0.6, r * 0.6, this.data.id * 31 + 2, true, 0.8);
     }
     // thème viking : un bouclier rond dans le dos, et une barbe pour les hommes
     if (isViking()) {

@@ -30,6 +30,9 @@ export const COSTS = {
   church: { coins: 70, mat: 16, sec: 16 }, // planches ; l'église et son cimetière
   farm: { coins: 90, mat: 20, sec: 18 }, // planches ; la ferme (5 × 5 cases, douze parcelles)
   stable: { coins: 70, mat: 16, sec: 14 }, // planches ; l'étable (4 × 4 cases) et son enclos
+  pantry: { coins: 20, mat: 10, sec: 10 }, // planches ; le garde-manger (3 × 3 cases) : toute la nourriture y est rangée
+  tavern: { coins: 70, mat: 16, sec: 14 }, // planches ; la taverne (3 × 3 cases)
+  shipyard: { coins: 250, mat: 40, sec: 28 }, // planches ; le chantier du grand drakkar (6 × 6 cases, au bord de la mer)
   market: { coins: 50, mat: 12, sec: 12 }, // planches ; le marché (3 × 3 cases) où passe la caravane
   pigpen: { coins: 60, mat: 14, sec: 12 }, // planches ; la porcherie (4 × 4 cases) et son enclos
 };
@@ -51,7 +54,7 @@ export const EXHAUSTED = 8; // en dessous, il rentre se reposer
 export const WAKE_AT = 95; // énergie à retrouver avant de repartir au travail
 
 // ---------- stockage ----------
-export const CAMP_CAPACITY = 20; // bûches d'un camp de bûcheron
+export const CAMP_CAPACITY = 40; // bûches d'un camp de bûcheron
 // Améliorations d'un dépôt : niveau 1 (de base), 2 et 3. Passer au niveau suivant coûte des pièces et des planches (prises dans les stocks).
 export const DEPOT_LEVELS = [
   { cap: 60, coins: 0, planks: 0 },
@@ -78,6 +81,8 @@ export const THIRST_FULL_SEC = 240; // de comblé à 100 % de soif
 export const HUNGER_FULL_SEC = 360;
 export const NEED_GO = 60; // % à partir duquel il rentre chez lui
 export const NEED_BAD = 80; // % : il traîne, et sans rien à la maison il s'énerve
+export const NEED_FULL_SEC = 300; // soif ou faim à 100 % pendant ce temps (5 min) : le mécontentement monte, même si la maison a des réserves
+export const NEED_NOSOURCE_UNREST = 0.3; // points de mécontentement par seconde quand la maison est à sec et qu'aucune source n'est disponible nulle part
 export const NEED_UNREST = 0.5; // points de mécontentement par seconde quand sa maison ne peut pas le satisfaire
 export const WATER_MAX = 4; // eau portée par un habitant en corvée
 
@@ -146,11 +151,12 @@ export const JOBS = {
   camp: { slots: 3, label: "Bûcheron" }, // coupe les arbres autour du camp et les y dépose
   lodge: { slots: 2, label: "Chasseur" },
   apiary: { slots: 1, label: "Apiculteur" },
-  site: { slots: 3, label: "Bâtisseur" },
+  site: { slots: 6, label: "Bâtisseur" },
   depot: { slots: 3, label: "Porteur" }, // transporte tout, d'un bâtiment à l'autre
   port: { slots: 2, label: "Porteur" },
   sawmill: { slots: 2, label: "Scieur" },
   butcher: { slots: 2, label: "Boucher" },
+  tavern: { slots: 2, label: "Cuisinier" }, // rapporte les ingrédients des dépôts et prépare les plats
   pigpen: { slots: 2, label: "Porcher" }, // nourrit et fait boire les cochons, les abat quand on le demande et rapporte la viande au dépôt
   stable: { slots: 2, label: "Éleveur" }, // nourrit et fait boire les vaches, trait le lait et le range au dépôt
   farm: { slots: 3, label: "Fermier" }, // sème, fait pousser et récolte les parcelles, puis range la récolte au dépôt
@@ -171,6 +177,46 @@ export const LIFESPAN_MIN = 70;
 export const LIFESPAN_MAX = 90;
 export const AGE_ELDER = 60; // à partir de là : « âgé »
 export const AGE_WARN = 5; // prévenu cinq ans avant la fin
+
+// ---------- la taverne et ses recettes ----------
+// Le cuisinier prépare des plats avec les légumes de la ferme, la viande préparée, le miel, le lait et les baies des dépôts. Chaque plat redonne de l'énergie
+// (fatigue en moins) et rassasie plus ou moins longtemps : pendant ce temps le villageois n'a pas faim. Un villageois affamé ou fatigué passe manger à la taverne.
+export interface Recipe {
+  id: string;
+  label: string;
+  emoji: string;
+  needs: Partial<Record<ExportGood, number>>; // ingrédients
+  energy: number; // énergie rendue (sur 100)
+  sated: number; // secondes pendant lesquelles il n'a plus faim
+  cookSec: number; // temps de préparation
+}
+export const RECIPES: Recipe[] = [
+  { id: "porridge", label: "Bouillie aux baies", emoji: "🫐", needs: { berries: 3, wheat: 1 }, energy: 10, sated: 120, cookSec: 4 },
+  { id: "soup", label: "Soupe de légumes", emoji: "🥣", needs: { carrot: 2, tomato: 1 }, energy: 15, sated: 180, cookSec: 5 },
+  { id: "bread", label: "Pain au miel", emoji: "🍞", needs: { wheat: 3, honey: 1 }, energy: 20, sated: 240, cookSec: 5 },
+  { id: "galette", label: "Galette de maïs au lait", emoji: "🫓", needs: { corn: 2, milk: 1 }, energy: 25, sated: 300, cookSec: 6 },
+  { id: "stew", label: "Ragoût de viande", emoji: "🍲", needs: { cuts: 2, carrot: 2, tomato: 1 }, energy: 35, sated: 420, cookSec: 7 },
+  { id: "roast", label: "Rôti du viking", emoji: "🍖", needs: { cuts: 3, corn: 1, honey: 1 }, energy: 55, sated: 600, cookSec: 9 },
+];
+export const DISH_CAP = 8; // plats de chaque recette que la taverne garde
+export const PANTRY_CAP = 16; // ingrédients de chaque sorte gardés au garde-manger de la taverne
+export const COOK_CARRY = 8; // ce que le cuisinier rapporte d'un coup
+export const DINE_HUNGER = 45; // % de faim à partir duquel un villageois passe manger à la taverne
+export const DINE_ENERGY = 45; // % d'énergie en dessous duquel il y passe aussi
+export const DINE_COOLDOWN = 150; // secondes de jeu avant qu'il y retourne
+
+// ---------- le grand drakkar ----------
+// Le chantier naval (4 × 4 cases) construit un grand drakkar en plusieurs étapes : à chaque étape on livre des marchandises prises dans les dépôts.
+// Une fois le drakkar terminé, tout le village embarque et part fonder une colonie sur une île nouvelle (on repart de zéro, avec les villageois et les pièces).
+export const SHIPYARD_SIZE = 6; // le chantier occupe 6 × 6 cases, sur la côte
+export const DRAKKAR_STAGES: { label: string; needs: Partial<Record<ExportGood, number>> }[] = [
+  { label: "Quille et membrures", needs: { plank: 50, wood: 40 } },
+  { label: "Bordé et pont", needs: { plank: 80, cuts: 15 } },
+  { label: "Mât, voile et rames", needs: { plank: 50, berries: 20, honey: 12 } },
+  { label: "Provisions du voyage", needs: { cuts: 35, wheat: 30, honey: 15, carrot: 20 } },
+];
+// Objectif sur une île de colonie : de quoi prouver que la colonie prospère.
+export const COLONY_GOAL = { people: 12, port: 1, church: 1, market: 1, farm: 1 };
 
 // ---------- marché et caravane ----------
 // Le marché (3 × 3 cases) reçoit de temps en temps une caravane de marchands : elle reste un moment, vend des marchandises (plus cher que le port ne les paie)

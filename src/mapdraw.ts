@@ -4,9 +4,11 @@
 import { CHUNK, GRID } from "./config";
 import { C } from "./draw";
 import { Zone, zoneBounds, zoneContains } from "./zone";
+import { isViking } from "./theme";
+import { paintTree } from "./painted";
 import {
   DEEP, MapObject, N, ROCK, SAND, SHALLOW, SAMPLES, T, cellTerrain, elev, flatAt, forestAmount, isTree, moist, objects, rng,
-  shade, smoothstep, tone,
+  shade, smoothstep, tone, vnoise,
 } from "./world";
 
 type RGB = [number, number, number];
@@ -107,7 +109,9 @@ function drawObject(g: CanvasRenderingContext2D, o: Pick<MapObject, "kind" | "x"
   const rand = rng(o.seed);
   const v = rand() * 14 - 7;
 
-  if (o.kind === "oak") {
+  if (isViking() && (o.kind === "oak" || o.kind === "pine")) {
+    paintTree(g, x, y, (o.kind === "oak" ? 0.36 : 0.34) * C * s, o.seed, o.kind);
+  } else if (o.kind === "oak") {
     const r = 0.34 * C * s;
     g.fillStyle = "rgba(20,40,10,0.24)";
     g.beginPath();
@@ -432,6 +436,43 @@ export class TerrainRenderer {
     g.beginPath();
     g.rect(cx * CH, cy * CH, CH, CH);
     g.clip();
+    if (isViking()) {
+      // du relief tout doux : quelques touffes d'herbe plus foncées (avec des brins) et de légers reflets clairs, sur l'herbe seulement
+      const rr = rng(cx * 7919 + cy * 104729 + 5);
+      for (let i = 0; i < 90; i++) {
+        const wx = cx * CHUNK + rr() * CHUNK;
+        const wy = cy * CHUNK + rr() * CHUNK;
+        const ix = Math.floor(wx);
+        const iy = Math.floor(wy);
+        if (ix >= GRID || iy >= GRID || cellTerrain[iy * GRID + ix] !== T.Grass) continue;
+        const px = wx * C;
+        const py = wy * C;
+        const kind = rr();
+        const rx = (0.16 + rr() * 0.3) * C;
+        if (kind < 0.7) {
+          g.fillStyle = `rgba(50,94,38,${0.13 + rr() * 0.12})`; // une touffe plus sombre
+          g.beginPath();
+          g.ellipse(px, py, rx, rx * 0.6, rr() * 3, 0, Math.PI * 2);
+          g.fill();
+          g.strokeStyle = "rgba(40,82,30,0.5)";
+          g.lineWidth = 1.4;
+          g.lineCap = "round";
+          for (let b = 0; b < 4; b++) {
+            const bx = px + (rr() - 0.5) * rx * 1.2;
+            const by = py + (rr() - 0.5) * rx * 0.5;
+            g.beginPath();
+            g.moveTo(bx, by + 4);
+            g.quadraticCurveTo(bx + (rr() - 0.5) * 4, by, bx + (rr() - 0.5) * 6, by - 5 - rr() * 5);
+            g.stroke();
+          }
+        } else {
+          g.fillStyle = `rgba(205,232,135,${0.1 + rr() * 0.08})`; // un reflet de lumière
+          g.beginPath();
+          g.ellipse(px, py, rx * 1.2, rx * 0.7, rr() * 3, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
+    }
     const list = this.baked[cy * this.perSide + cx];
     for (const o of list) if (o.kind === "tuft" || o.kind === "flower" || o.kind === "reed" || o.kind === "lily") drawObject(g, o);
     for (const o of list) if (o.kind === "rock") drawObject(g, o);

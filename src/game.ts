@@ -1,24 +1,26 @@
 import { Animal, POPULATION, Species } from "./animals";
-import { MARKET_STAY_SEC, PIGPEN_SIZE, PIGS_MAX, PIG_PRICE, PIG_SELL, PIG_FEED_CAP, PIG_WATER_CAP, PIG_MEAT, PIG_KEEP, SWINE_CARRY, STABLE_SIZE, STABLE_COWS_MAX, STABLE_FEED_CAP, STABLE_WATER_CAP, STABLE_MILK_CAP, COW_PRICE, COW_SELL, HERDER_CARRY, EXPORT_GOODS, ExportGood, FARM_CARRY, FARM_CROPS, FARM_PLOTS, FARM_SIZE, FARM_FETCH, FARM_TANK_CAP, FarmCrop } from "./balance";
+import { RECIPES, DISH_CAP, PANTRY_CAP, COOK_CARRY, DINE_HUNGER, DINE_ENERGY, DINE_COOLDOWN, SHIPYARD_SIZE, DRAKKAR_STAGES, COLONY_GOAL, MARKET_STAY_SEC, PIGPEN_SIZE, PIGS_MAX, PIG_PRICE, PIG_SELL, PIG_FEED_CAP, PIG_WATER_CAP, PIG_MEAT, PIG_KEEP, SWINE_CARRY, STABLE_SIZE, STABLE_COWS_MAX, STABLE_FEED_CAP, STABLE_WATER_CAP, STABLE_MILK_CAP, COW_PRICE, COW_SELL, HERDER_CARRY, EXPORT_GOODS, ExportGood, FARM_CARRY, FARM_CROPS, FARM_PLOTS, FARM_SIZE, FARM_FETCH, FARM_TANK_CAP, FarmCrop } from "./balance";
 import { HELP_TOPICS } from "./help";
-import { THEME, ThemeId, isViking, saveTheme, themeContext, tl, vn } from "./theme";
+import { ROAD_STYLES, cycleRoadStyle, getRoadStyle, THEME, ThemeId, isViking, saveTheme, themeContext, tl, vn } from "./theme";
 import { drawVikingDeco } from "./viking";
 import { play, Cue, getVolume, isSoundOff, setSoundOff, setVolume } from "./sound";
 import { CHURCH_GRAVES, AGE_ELDER, HEAL_LEVELS, PREVENT_RESERVE, XP_BREW, XP_CURE, XP_PREVENT, XP_TREAT, CLINIC_BERRY_CAP, CLINIC_HONEY_CAP, CLINIC_REMEDY_CAP, ILLNESSES, REMEDIES, RemedyKind, SICK_BED, DEPOT_LEVELS, JOBS, LUMBER_RADIUS, NEED_BAD, WorkplaceKind } from "./balance";
 import { DAY_SEC, DEPARTURE_RETURN_SEC, HOME_OK_NUISANCE, HOME_RETURN_OK, LEAVE_AFTER_SEC, MOOD, REPOP_SEC, SEASON_DAYS, TEND_BELOW } from "./balance";
 import { DEMO, FISH_COOLDOWN_MS, GRID, SAVE_KEY } from "./config";
 import { CROPS, CROP_BY_ID } from "./crops";
-import { C, drawCamp, drawDepot, drawSawmill, drawWell, drawLodge, drawButcher, drawPort, drawShip, drawApiary, drawClinic, drawChurch, drawFarm, drawStable, drawPigpen, drawMarket, drawCaravan, drawCorpse, drawEntrance, drawHouse, drawRoadCell, drawRoads, drawSite, drawTile, drawStructureThumb } from "./draw";
+import { C, drawCamp, drawDepot, drawSawmill, drawWell, drawLodge, drawButcher, drawPort, drawShip, drawApiary, drawClinic, drawChurch, drawFarm, drawStable, drawPigpen, drawMarket, drawCaravan, drawShipyard, drawTavern, drawCorpse, drawEntrance, drawHouse, drawRoadCell, drawRoads, drawSite, drawTile, drawStructureThumb } from "./draw";
 import { GOOD_EMOJIS } from "./goods";
 import { TerrainRenderer } from "./mapdraw";
 import { findPath, roadRoute } from "./path";
 import { STRUCTURES } from "./structures";
 import { TERRAIN_LABELS, isWater, objects, terrainAt } from "./world";
-import { BuildRoute, HaulRoute, HealPlan, BuryPlan, FarmPlan, StablePlan, SwinePlan, WaterRoute, Worker, WorkerEnv } from "./worker";
+import { BuildRoute, HaulRoute, HealPlan, BuryPlan, FarmPlan, StablePlan, SwinePlan, CookPlan, DinePlan, WaterRoute, Worker, WorkerEnv } from "./worker";
 import { Zone, zoneBounds } from "./zone";
 import {
   Action, BuildResult, CAMP_CAPACITY, Camp, CREW_COLORS, FEMALE_NAMES, DEPOT_CAPACITY, Depot, MAX_CREW, ARRIVAL_SEC, addVillager, Pos, Save, addToDepot, campAt, campEntrance, depotEntrance, depotFree, depotCapacity, depotLevel, upgradeDepot, woodStock,
   clockHour, clockDay, darkness, seasonAt, tickDiscontent, DiscontentEvent, nuisanceLevel, houseMood, moodAt, nuisancePen, nuisanceSources, housesNear, NuisanceKey,
+  consolidateFood, placePantry, Tavern, tavernAt, tavernEntrance, placeTavern, removeTavern, canPlaceTavern, dishCount,
+  Shipyard, shipyardAt, shipyardEntrance, shipyardRot, shipyardSpot, placeShipyard, removeShipyard, canPlaceShipyard, shipyardNeeds, deliverToShipyard, shipyardDone, sail, goals,
   Market, marketAt, marketEntrance, placeMarket, removeMarket, canPlaceMarket, tickMarkets, arriveCaravan, buyFromCaravan, sellToCaravan, depotGoodTotal, marketBuyPrice, marketSellPrice,
   Pigpen, pigpenAt, pigpenEntrance, placePigpen, removePigpen, canPlacePigpen, buyPig, slaughterPig, tickPigpens, pigpenSlaughterCell, pigpenTroughCell, pigAdult, pigFed, pigWatered, adultsOf,
   Stable, stableAt, stableEntrance, placeStable, removeStable, canPlaceStable, buyCow, sellCow, tickStables, stableMilkCell, stableTroughCell, cowFed, cowWatered,
@@ -27,7 +29,7 @@ import {
   Clinic, clinicAt, clinicEntrance, placeClinic, removeClinic, canPlaceClinic, addClinicStock, brewable, brew, bestRemedy, applyRemedy, infect, tickHealth, HealthEvent, healSkill, protectVillager, clearBerries, isBerryGone, tickAging, AgeEvent, WorkerSave,
   houseHungry, tickHunger, takeCuts, addFood, HOUSE_FOOD_CAP, isPicked, pickBush, addBerriesToDepot, berryStock,
   Apiary, apiaryAt, apiaryEntrance, placeApiary, removeApiary, canPlaceApiary, tickApiaries, tendApiary, harvestApiary, addHoneyToDepot, honeyStock, apiaryBusy, HONEY_CAP, PRICE_HONEY, PRICE_BERRIES,
-  Port, portAt, portEntrance, portRot, placePort, removePort, canPlacePort, addToPort, portFree, portSpace, portAccepts, tickPorts, goodsOf, takeGood, exportableOf, exportableTotal, portStock, portQuota, EXPORT_LIST, PORT_CAP, PORT_QUOTA_DEFAULT, PRICE_PLANK, PRICE_CUTS, SHIP_CYCLE, SHIP_ARRIVE, SHIP_DOCKED, SHIP_DEPART,
+  Port, portAt, portEntrance, portRot, placePort, removePort, canPlacePort, addToPort, portFree, portSpace, portAccepts, tickPorts, goodsOf, takeGood, exportableOf, exportableTotal, portReserve, exportable, villageStock, portStock, portQuota, EXPORT_LIST, PORT_CAP, PORT_QUOTA_DEFAULT, PRICE_PLANK, PRICE_CUTS, SHIP_CYCLE, SHIP_ARRIVE, SHIP_DOCKED, SHIP_DEPART,
   Butcher, butcherAt, butcherEntrance, placeButcher, removeButcher, canPlaceButcher, addRawMeat, takeMeat, butcherWorking, tickButchers, cutsStock, HaulDest, haulDest,
   BUTCHER_MEAT_CAP, BUTCHER_CUTS_CAP, CUT_SEC,
   Lodge, lodgeAt, lodgeEntrance, placeLodge, removeLodge, canPlaceLodge, addMeat, lodgeFree, meatStock, HUNT_RADIUS, LODGE_CAP,
@@ -121,6 +123,11 @@ export class Game {
   private recruitOpen = false; // menu d'un bâtiment : la liste des villageois sans emploi est dépliée
   private jobMenuOpen = false; // menu du villageois : la liste des travaux possibles est dépliée
   private farmPick: number | null = null; // parcelle dont on est en train de choisir la culture (menu de la ferme)
+  private tavernSel: Tavern | null = null; // taverne sélectionnée : son menu est ouvert
+  private dineCool = new Map<number, number>(); // villageois → heure de jeu avant laquelle il ne retourne pas manger
+  private shipSel: Shipyard | null = null; // chantier naval sélectionné : son menu est ouvert
+  private goalT = 0;
+  private pantryT = 0;
   private marketSel: Market | null = null; // marché sélectionné : son menu est ouvert
   private pigpenSel: Pigpen | null = null; // porcherie sélectionnée : son menu est ouvert
   private stableSel: Stable | null = null; // étable sélectionnée : son menu est ouvert
@@ -130,6 +137,8 @@ export class Game {
   private clinicSel: Clinic | null = null; // maison du soigneur sélectionnée : son menu est ouvert
   private healClaims = new Map<number, number>(); // soigneur → malade dont il s'occupe
   private apiarySel: Apiary | null = null; // rucher sélectionné : son menu est ouvert
+  private portOpen: Port | null = null; // le port dont la fenêtre est ouverte
+  private portRefresh = 0;
   private portSel: Port | null = null; // port sélectionné : son menu est ouvert
   private butcherSel: Butcher | null = null; // boucherie sélectionnée : son menu est ouvert
   private lodgeSel: Lodge | null = null; // camp de chasseur sélectionné : son menu est ouvert
@@ -198,7 +207,7 @@ export class Game {
     this.migrateEmployment();
     this.spawnAnimals(q);
     // Au départ rien n'est sélectionné. Les paramètres de test (?goto, ?role, ?wood, ?assign, ?sel, ?haul) sélectionnent le premier personnage.
-    const testKeys = ["goto", "role", "wood", "assign", "sel", "haul", "haulsaw", "waterjob", "hunt", "haulbutcher", "haulany", "lumber", "bee", "foodjob", "builder", "gather", "heal", "bury", "farmer", "herder"];
+    const testKeys = ["goto", "role", "wood", "assign", "sel", "haul", "haulsaw", "waterjob", "hunt", "haulbutcher", "haulany", "lumber", "bee", "foodjob", "builder", "gather", "heal", "bury", "farmer", "herder", "swineherd", "cook"];
     this.selected = testKeys.some((k) => q.has(k)) ? this.workers[0] : null;
     this.env = this.makeEnv();
     this.cam.x = (this.workers[0]?.x ?? GRID / 2) * C;
@@ -224,6 +233,7 @@ export class Game {
     this.applyTestParams(q);
     document.getElementById("loading")?.remove();
     if (this.save.lost) setTimeout(() => this.showLost(), 300);
+    else if (this.save.arrival) setTimeout(() => this.showArrival(), 600);
     document.getElementById("lostBanner")?.addEventListener("click", () => this.showLost());
     if (q.get("lose")) setTimeout(() => this.killAll(), 500); // essai : ?lose=1 fait mourir tous les villageois
     requestAnimationFrame((t) => this.frame(t));
@@ -288,7 +298,7 @@ export class Game {
       const d = recruit(this.save);
       if (d) this.workers.push(new Worker(d));
     }
-    this.save.coins = ["camp", "depot", "road", "sitecamp", "sitedepot", "house", "sitehouse", "sawmill", "sitesawmill", "well", "sitewell", "lodge", "sitelodge", "butcher", "sitebutcher", "port", "siteport", "apiary", "siteapiary", "clinic", "siteclinic", "church", "sitechurch", "farm", "sitefarm", "stable", "sitestable", "pigpen", "sitepigpen", "market", "sitemarket"].some((k) => q.has(k)) ? Math.max(this.save.coins, 300) : this.save.coins;
+    this.save.coins = ["camp", "depot", "road", "sitecamp", "sitedepot", "house", "sitehouse", "sawmill", "sitesawmill", "well", "sitewell", "lodge", "sitelodge", "butcher", "sitebutcher", "port", "siteport", "apiary", "siteapiary", "clinic", "siteclinic", "church", "sitechurch", "farm", "sitefarm", "stable", "sitestable", "pigpen", "sitepigpen", "market", "sitemarket", "shipyard", "siteshipyard", "autoyard", "tavern", "sitetavern", "larder"].some((k) => q.has(k)) ? Math.max(this.save.coins, 300) : this.save.coins;
     // ?camp / ?depot : bâtiment déjà construit ; ?sitecamp / ?sitedepot : seulement les fondations
     const rot = Number(q.get("rot") ?? 0);
     const camp = nums("camp");
@@ -308,6 +318,32 @@ export class Game {
     if (clinicAtXY?.length === 2) placeClinic(this.save, clinicAtXY[0], clinicAtXY[1], true, rot);
     const churchAtXY = nums("church");
     if (churchAtXY?.length === 2) placeChurch(this.save, churchAtXY[0], churchAtXY[1], true, rot);
+    const larderXY = nums("larder"); // ?larder=x,y : un garde-manger tout de suite
+    if (larderXY?.length === 2) placePantry(this.save, larderXY[0], larderXY[1], true, rot);
+    const tavernAtXY = nums("tavern");
+    if (tavernAtXY?.length === 2) placeTavern(this.save, tavernAtXY[0], tavernAtXY[1], true, rot);
+    const sitetavern = nums("sitetavern");
+    if (sitetavern?.length === 2) placeTavern(this.save, sitetavern[0], sitetavern[1], false, rot);
+    if (this.save.taverns[0]) {
+      const tv0 = this.save.taverns[0];
+      const dn = Number(q.get("dishes") ?? 0); // ?dishes=n : n plats de chaque recette
+      if (dn) for (const r of RECIPES) tv0.dishes[r.id] = Math.min(DISH_CAP, dn);
+      const pn = Number(q.get("pantry") ?? 0); // ?pantry=n : n de chaque ingrédient au garde-manger
+      if (pn) for (const r of RECIPES) for (const g of Object.keys(r.needs) as (keyof typeof tv0.pantry)[]) tv0.pantry[g] = Math.min(PANTRY_CAP, pn);
+    }
+    if (q.get("tavernmenu")) this.tavernSel = this.save.taverns[0] ?? null;
+    if (q.get("hunger")) for (const w of this.save.workers) w.hunger = Number(q.get("hunger")); // ?hunger=n : la faim de tous les villageois
+    if (q.get("tired")) for (const w of this.save.workers) w.energy = 100 - Number(q.get("tired")); // ?tired=n : la fatigue de tous les villageois
+    const shipAtXY = nums("shipyard");
+    if (shipAtXY?.length === 2) placeShipyard(this.save, shipAtXY[0], shipAtXY[1], true);
+    if (q.get("autoyard")) {
+      // ?autoyard=1 : un chantier à la première côte valide, en spirale depuis le centre de la carte (essai)
+      search: for (let r = 4; r < 80; r++) for (let dx = -r; dx <= r; dx++) for (const dy of [-r, r]) for (const [x, y] of [[96 + dx, 96 + dy], [96 + dy, 96 + dx]]) if (canPlaceShipyard(this.save, x, y)) { placeShipyard(this.save, x, y, true); this.cam.x = (x + 3) * C; this.cam.y = (y + 3) * C; break search; }
+    }
+    const siteship = nums("siteshipyard");
+    if (siteship?.length === 2) placeShipyard(this.save, siteship[0], siteship[1], false);
+    if (this.save.shipyards[0] && q.get("stage")) this.save.shipyards[0].stage = Math.min(DRAKKAR_STAGES.length, Number(q.get("stage"))); // ?stage=n : l'étape du drakkar
+    if (q.get("shipmenu")) this.shipSel = this.save.shipyards[0] ?? null;
     const marketAtXY = nums("market");
     if (marketAtXY?.length === 2) placeMarket(this.save, marketAtXY[0], marketAtXY[1], true, rot);
     const sitemarket = nums("sitemarket");
@@ -406,7 +442,7 @@ export class Game {
     if (q.get("portstock") && this.save.ports[0]) Object.assign(this.save.ports[0], { planks: Number(q.get("portstock")), cuts: Number(q.get("portstock")) });
     if (q.get("shipt") && this.save.ports[0]) this.save.ports[0].t = Number(q.get("shipt")) * SHIP_CYCLE;
     if (q.get("quota") && this.save.ports[0]) for (const g of EXPORT_LIST) this.save.ports[0].quota[g] = Number(q.get("quota")); // ?quota=n : le même réglage partout
-    if (q.get("portmenu")) this.portSel = this.save.ports[0] ?? null;
+    if (q.get("portmenu")) setTimeout(() => this.save.ports[0] && this.openPort(this.save.ports[0]), 500); // essai : la fenêtre du port
     const butcher = nums("butcher");
     if (butcher?.length === 2) placeButcher(this.save, butcher[0], butcher[1], true, rot);
     const sitebutcher = nums("sitebutcher");
@@ -492,6 +528,7 @@ export class Game {
       // essais : ?haul / ?haulany (porteur au premier dépôt ou port), ?haulsaw (scieur), ?haulbutcher (boucher), ?bee, ?hunt, ?lumber, ?builder
       if ((q.get("haul") || q.get("haulany")) && (this.save.depots[0] || this.save.ports[0])) this.hire(sel, this.save.depots[0] ? "depot" : "port", (this.save.depots[0] ?? this.save.ports[0]).id);
       if (q.get("haulsaw") && this.save.sawmills[0]) this.hire(sel, "sawmill", this.save.sawmills[0].id);
+      if (q.get("cook") && this.save.taverns[0]) this.hire(sel, "tavern", this.save.taverns[0].id);
       if (q.get("swineherd") && this.save.pigpens[0]) this.hire(sel, "pigpen", this.save.pigpens[0].id);
       if (q.get("herder") && this.save.stables[0]) this.hire(sel, "stable", this.save.stables[0].id);
       if (q.get("farmer") && this.save.farms[0]) this.hire(sel, "farm", this.save.farms[0].id);
@@ -653,6 +690,13 @@ export class Game {
     document.getElementById("rotate")?.addEventListener("click", () => this.rotate());
     document.getElementById("popPill")?.addEventListener("click", () => this.openFolk());
     document.getElementById("folkClose")?.addEventListener("click", () => this.closeFolk());
+    document.getElementById("portClose")?.addEventListener("click", () => this.closePort());
+    document.getElementById("portModal")?.addEventListener("click", (e) => {
+      if (e.target === e.currentTarget) this.closePort(); // un clic à côté de la fenêtre la ferme
+    });
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && this.portOpen) this.closePort();
+    });
     document.getElementById("folkModal")?.addEventListener("click", (e) => {
       if (e.target === e.currentTarget) this.closeFolk(); // un clic à côté du tableau le ferme
     });
@@ -679,7 +723,7 @@ export class Game {
     document.addEventListener("click", (e) => {
       if (!this.build.open || this.build.selected) return;
       const t = e.target as HTMLElement;
-      if (t.id === "game" || t.closest("#build, #buildBtn, #menuModal, #folkModal, #campMenu, #toast")) return;
+      if (t.id === "game" || t.closest("#build, #buildBtn, #menuModal, #folkModal, #portModal, #campMenu, #toast")) return;
       this.build.open = false;
     });
     window.ferme?.onUpdate((u) => {
@@ -722,6 +766,66 @@ export class Game {
       input.value = "";
     });
     if (new URLSearchParams(location.search).has("menu")) setTimeout(() => this.openMenu(), 400); // essai
+  }
+
+  // ---------- le grand drakkar : le voyage vers une île nouvelle ----------
+
+  // Tout le village embarque : une île nouvelle accueille les villageois et les pièces. L'ancienne partie est gardée de côté.
+  private setSail() {
+    persist(this.save);
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (raw) localStorage.setItem(`${SAVE_KEY}-ile${this.save.island ?? 0}`, raw); // l'île quittée reste archivée
+    } catch {
+      /* tant pis */
+    }
+    persist(sail(this.save));
+    location.reload();
+  }
+
+  // Une fenêtre d'annonce (arrivée sur l'île, victoire).
+  private showNews(title: string, lines: string[], big = true) {
+    const modal = document.getElementById("winModal") as HTMLElement;
+    (document.getElementById("winTitle") as HTMLElement).textContent = title;
+    const body = document.getElementById("winBody") as HTMLElement;
+    body.textContent = "";
+    lines.forEach((t, i) => {
+      const p = document.createElement("p");
+      p.className = big && i === 0 ? "lostBig" : "";
+      p.textContent = t;
+      body.appendChild(p);
+    });
+    const row = document.createElement("div");
+    row.className = "lostRow";
+    const b = document.createElement("button");
+    b.className = "mBtn on";
+    b.textContent = "▶ Continuer";
+    b.addEventListener("click", () => {
+      modal.hidden = true;
+      this.paused = false;
+    });
+    row.appendChild(b);
+    body.appendChild(row);
+    this.paused = true;
+    modal.hidden = false;
+  }
+
+  private showArrival() {
+    this.save.arrival = false;
+    persist(this.save);
+    this.showNews("⛵ Terre en vue !", [`Le grand drakkar a atteint une île nouvelle (île ${(this.save.island ?? 0) + 1}).`, `Les ${this.workers.length} villageois débarquent avec ${this.save.coins} pièces, mais sans aucun bâtiment.`, `Objectif : fonder une colonie qui prospère (${COLONY_GOAL.people} habitants, un port, une église, un marché, une ferme).`]);
+  }
+
+  // Sur une île de colonie : l'objectif est-il atteint ?
+  private checkGoals(dt: number) {
+    this.goalT -= dt;
+    if (this.goalT > 0) return;
+    this.goalT = 3;
+    if ((this.save.island ?? 0) < 1 || this.save.victory || this.save.lost) return;
+    if (!goals(this.save).every((g) => g.done)) return;
+    this.save.victory = true;
+    persist(this.save);
+    this.showNews("🏆 Colonie fondée !", ["Bravo : la colonie prospère !", `Tu as tenu ${clockDay(this.save.clock)} jours. Tu peux continuer à jouer, ou construire un nouveau drakkar pour partir encore plus loin.`]);
   }
 
   // ---------- défaite : plus aucun villageois ----------
@@ -965,6 +1069,29 @@ export class Game {
         location.reload(); // le thème s'applique partout au rechargement ; la partie est sauvegardée
       }),
     );
+    const goalBox = document.createElement("div");
+    goalBox.className = "menuRow";
+    const island = this.save.island ?? 0;
+    const head0 = document.createElement("div");
+    head0.style.fontWeight = "700";
+    head0.textContent = island === 0 ? "🎯 Objectif : le grand drakkar" : `🎯 Objectif : fonder la colonie (île ${island + 1})`;
+    goalBox.appendChild(head0);
+    for (const gl of goals(this.save)) {
+      const row = document.createElement("div");
+      row.textContent = `${gl.done ? "✅" : "⬜"} ${gl.label}`;
+      goalBox.appendChild(row);
+    }
+    body.appendChild(goalBox);
+    sep();
+    if (THEME === "viking") {
+      const rs = ROAD_STYLES.find((r) => r.id === getRoadStyle())!;
+      body.appendChild(
+        btn(`🛤️ Chemins : ${rs.label} (changer)`, () => {
+          cycleRoadStyle();
+          this.renderMenu(helpOpen);
+        }),
+      );
+    }
     body.appendChild(btn("📖 Guide des bâtiments", () => this.openHelp()));
     body.appendChild(btn(helpOpen ? "❓ Commandes ▴" : "❓ Commandes ▾", () => this.renderMenu(!helpOpen)));
     if (helpOpen) {
@@ -1043,6 +1170,18 @@ export class Game {
       this.depotSel = depot;
       return;
     }
+    const taverne = cc ? tavernAt(this.save, cc.gx, cc.gy) : null;
+    if (taverne) {
+      this.deselectAll();
+      this.tavernSel = taverne;
+      return;
+    }
+    const cale = cc ? shipyardAt(this.save, cc.gx, cc.gy) : null;
+    if (cale) {
+      this.deselectAll();
+      this.shipSel = cale;
+      return;
+    }
     const halle = cc ? marketAt(this.save, cc.gx, cc.gy) : null;
     if (halle) {
       this.deselectAll();
@@ -1088,7 +1227,7 @@ export class Game {
     const dock = cc ? portAt(this.save, cc.gx, cc.gy) : null;
     if (dock) {
       this.deselectAll();
-      this.portSel = dock;
+      this.openPort(dock);
       return;
     }
     const shop = cc ? butcherAt(this.save, cc.gx, cc.gy) : null;
@@ -1191,6 +1330,8 @@ export class Game {
     this.stableSel = null;
     this.pigpenSel = null;
     this.marketSel = null;
+    this.shipSel = null;
+    this.tavernSel = null;
   }
 
   private workerAt(wx: number, wy: number): Worker | null {
@@ -1348,6 +1489,21 @@ export class Game {
       if (c.berries < CLINIC_BERRY_CAP - 4) {
         const withBerries = depots.find((d) => (d.berries ?? 0) > 0);
         if (withBerries) return { type: "fetch", target: depotEntrance(withBerries), depotId: withBerries.id, good: "berries" };
+        // pas de baies en réserve : il va en cueillir sur un arbuste sauvage, n'importe où sur la carte
+        this.berryList ??= objects.map((o, i) => (o.kind === "berry" ? i : -1)).filter((i) => i >= 0);
+        let best = -1;
+        let bestD = Infinity;
+        for (const i of this.berryList) {
+          if (this.claimed.has(i) || w.skipsBush(i) || isPicked(s, i)) continue;
+          const d = Math.hypot(objects[i].x - _from.gx, objects[i].y - _from.gy);
+          if (d < bestD) {
+            best = i;
+            bestD = d;
+          }
+        }
+        if (best >= 0) {
+          return { type: "bush", target: { gx: Math.floor(objects[best].x), gy: Math.floor(objects[best].y) }, idx: best };
+        }
       }
     }
     return null;
@@ -1378,6 +1534,99 @@ export class Game {
     if (cows && st.water < STABLE_WATER_CAP - 7 && well) return { type: "fetchWater", target: wellEntrance(well), wellId: well.id };
     if (st.milk >= 1 && depotRoom) return { type: "milk", target: stableMilkCell(st) };
     return null;
+  }
+
+  // Le cuisinier choisit sa prochaine étape : ranger ce qu'il porte, préparer un plat si le garde-manger a tout, sinon aller chercher un ingrédient manquant.
+  private tavernPlan(tavernId: number, from: Pos, w: Worker): CookPlan | null {
+    const s = this.save;
+    const t = s.taverns.find((k) => k.id === tavernId);
+    if (!t) return null;
+    const door = tavernEntrance(t);
+    if (w.data.carry > 0) return { type: "stock", target: door };
+    const have = (g: keyof typeof t.pantry) => t.pantry[g] ?? 0;
+    const inDepots = (g: keyof typeof t.pantry) => s.depots.reduce((a, d) => a + (goodsOf("depot", d)[g] ?? 0), 0);
+    // la recette la moins en stock dont on a (ou peut réunir) tous les ingrédients
+    const options = RECIPES.filter((r) => (t.dishes[r.id] ?? 0) < DISH_CAP && (Object.entries(r.needs) as [keyof typeof t.pantry, number][]).every(([g, n]) => have(g) + inDepots(g) >= n)).sort((a, b) => (t.dishes[a.id] ?? 0) - (t.dishes[b.id] ?? 0));
+    const r = options[0];
+    if (!r) return null;
+    for (const [g, n] of Object.entries(r.needs) as [keyof typeof t.pantry, number][]) {
+      if (have(g) >= n) continue;
+      const depot = [...s.depots].filter((d) => (goodsOf("depot", d)[g] ?? 0) > 0).sort((a, b) => Math.hypot(depotEntrance(a).gx - from.gx, depotEntrance(a).gy - from.gy) - Math.hypot(depotEntrance(b).gx - from.gx, depotEntrance(b).gy - from.gy))[0];
+      if (!depot) return null;
+      return { type: "fetch", target: depotEntrance(depot), depotId: depot.id, good: g };
+    }
+    return { type: "cook", target: door, recipe: r.id };
+  }
+
+  // L'action du cuisinier une fois arrivé.
+  private tavernDo(plan: CookPlan, w: Worker) {
+    const s = this.save;
+    const job = w.data.job;
+    if (!job || job.type !== "cook") return;
+    const t = s.taverns.find((k) => k.id === job.tavernId);
+    if (!t) return;
+    const pop = this.toClient(w.x * C, w.y * C);
+    if (plan.type === "fetch") {
+      const d = s.depots.find((k) => k.id === plan.depotId);
+      const n = d ? takeGood("depot", d, plan.good, Math.min(COOK_CARRY, PANTRY_CAP - (t.pantry[plan.good] ?? 0))) : 0;
+      if (n > 0) {
+        w.data.cargo = plan.good as WorkerSave["cargo"];
+        w.data.carry = n;
+        this.floatText(pop.x, pop.y, `+${n} ${EXPORT_GOODS[plan.good].emoji}`);
+      }
+    } else if (plan.type === "stock") {
+      const g = w.data.cargo as keyof typeof t.pantry | undefined;
+      if (g) t.pantry[g] = Math.min(PANTRY_CAP, (t.pantry[g] ?? 0) + w.data.carry);
+      w.data.carry = 0;
+      w.data.cargo = undefined;
+    } else {
+      const r = RECIPES.find((k) => k.id === plan.recipe);
+      if (r && (Object.entries(r.needs) as [keyof typeof t.pantry, number][]).every(([g, n]) => (t.pantry[g] ?? 0) >= n)) {
+        for (const [g, n] of Object.entries(r.needs) as [keyof typeof t.pantry, number][]) t.pantry[g] = (t.pantry[g] ?? 0) - n;
+        t.dishes[r.id] = (t.dishes[r.id] ?? 0) + 1;
+        job.cooked += 1;
+        this.floatText(pop.x, pop.y, `+1 ${r.emoji} ${r.label}`);
+      }
+    }
+    persist(s);
+  }
+
+  // Les villageois affamés ou fatigués passent manger à la taverne (s'il y a des plats et qu'ils ont les mains libres).
+  private autoDining() {
+    const s = this.save;
+    if (!s.taverns.length) return;
+    const now = s.clock;
+    for (const w of this.workers) {
+      if (w.data.inside || w.data.resting || w.data.visit || w.data.carry > 0 || w.data.job?.type === "water" || w.data.illness) continue;
+      if ((this.dineCool.get(w.data.id) ?? 0) > now) continue;
+      const hungry = (w.data.hunger ?? 0) >= DINE_HUNGER && (w.data.fedFor ?? 0) <= 0;
+      const tired = w.energy <= DINE_ENERGY;
+      if (!hungry && !tired) continue;
+      const t = [...s.taverns].filter((k) => dishCount(k) > 0).sort((a, b) => Math.hypot(tavernEntrance(a).gx - w.cell.gx, tavernEntrance(a).gy - w.cell.gy) - Math.hypot(tavernEntrance(b).gx - w.cell.gx, tavernEntrance(b).gy - w.cell.gy))[0];
+      if (!t) continue;
+      this.dineCool.set(w.data.id, now + DINE_COOLDOWN);
+      w.startDine(t.id, this.env);
+    }
+  }
+
+  // Il mange un plat : celui qui convient le mieux (le plus énergétique s'il est fatigué, le plus rassasiant s'il a faim).
+  private dineDo(_plan: DinePlan, w: Worker) {
+    const s = this.save;
+    const job = w.data.job;
+    if (!job || job.type !== "water" || job.dine === undefined) return;
+    const t = s.taverns.find((k) => k.id === job.dine);
+    if (!t) return;
+    const menu = RECIPES.filter((r) => (t.dishes[r.id] ?? 0) > 0);
+    if (!menu.length) return;
+    const wantEnergy = 100 - w.energy >= (w.data.hunger ?? 0);
+    const dish = [...menu].sort((a, b) => (wantEnergy ? b.energy - a.energy : b.sated - a.sated))[0];
+    t.dishes[dish.id] -= 1;
+    w.data.energy = Math.min(100, w.energy + dish.energy);
+    w.data.hunger = 0;
+    w.data.fedFor = dish.sated;
+    const pop = this.toClient(w.x * C, w.y * C);
+    this.floatText(pop.x, pop.y, `${dish.emoji} +${dish.energy} ⚡`);
+    persist(s);
   }
 
   // Le porcher choisit sa prochaine étape : ranger la viande, abattre sur ordre, remplir l'auge ou l'abreuvoir, ou aller chercher des légumes ou de l'eau.
@@ -1735,6 +1984,14 @@ export class Game {
         w.data.carry = n;
         w.data.cargo = plan.good;
       }
+    } else if (plan.type === "bush") {
+      this.claimed.delete(plan.idx);
+      const got = pickBush(s, plan.idx);
+      if (got > 0) {
+        w.data.cargo = "berries";
+        w.data.carry = got;
+        this.floatText(pop.x, pop.y, `+${got} 🫐`);
+      }
     } else if (plan.type === "stock") {
       const cargo = w.data.cargo;
       if (cargo === "berries" || cargo === "honey") addClinicStock(c, cargo, w.data.carry);
@@ -1893,7 +2150,7 @@ export class Game {
   }
 
   // Démonte le bâtiment : il devient un chantier qui se défait en quelques secondes, puis rend une partie de ses matériaux.
-  private dismantle(b: House | Camp | Depot | Sawmill | Well | Lodge | Butcher | Port | Apiary | Clinic | Church | Farm | Stable | Pigpen | Market) {
+  private dismantle(b: House | Camp | Depot | Sawmill | Well | Lodge | Butcher | Port | Apiary | Clinic | Church | Farm | Stable | Pigpen | Market | Shipyard | Tavern) {
     // les habitants sortent un par un, chacun sur sa propre case
     for (const w of this.workers) if (w.inside && w.data.home === (b as House).id && this.save.houses.includes(b as House)) w.leave(this.env);
     startDismantle(this.save, b);
@@ -1920,7 +2177,7 @@ export class Game {
 
   // Boutons du bas de menu : tourner et démonter.
   // Pied du menu : deux gros boutons côte à côte, tourner et démonter (ou annuler le chantier).
-  private addMenuActions(box: HTMLElement, b: House | Camp | Depot | Sawmill | Well | Lodge | Butcher | Port | Apiary | Clinic | Church | Farm | Stable | Pigpen | Market | Site) {
+  private addMenuActions(box: HTMLElement, b: House | Camp | Depot | Sawmill | Well | Lodge | Butcher | Port | Apiary | Clinic | Church | Farm | Stable | Pigpen | Market | Shipyard | Tavern | Site) {
     const row = document.createElement("div");
     row.className = "menuActions";
     const btn = (icon: string, label: string, sub: string, fn: () => void) => {
@@ -1963,7 +2220,7 @@ export class Game {
       const lv = depotLevel(d);
       if (lv < DEPOT_LEVELS.length) {
         const next = DEPOT_LEVELS[lv];
-        btn("⬆️", "Améliorer", `${next.coins} 🪙 ${next.planks} 🪚 · ${next.cap} places`, () => {
+        btn("⬆️", "Améliorer", `${next.coins} 🪙 ${next.planks} 🪚 · ${next.cap * (d.pantry ? 2 : 1)} places`, () => {
           const r = upgradeDepot(this.save, d);
           if (r === "ok") {
             toast(`Dépôt amélioré : ${depotCapacity(d)} places.`);
@@ -2034,13 +2291,16 @@ export class Game {
   private autoErrands() {
     const s = this.save;
     for (const house of s.houses) {
+      // la maison est à sec (eau ou nourriture) et aucune source n'est disponible nulle part : ses habitants s'énervent, même retournés à leur travail
+      const dry = [false, true].some((f) => (f ? house.food ?? 0 : house.water ?? 0) <= 0 && !this.waterTarget(house.id, true, f).ok);
+      for (const o of this.workers) if (o.data.home === house.id) o.data.unsupplied = dry || undefined;
       for (const food of [false, true]) {
         const level = food ? house.food ?? 0 : house.water ?? 0;
         const cap = food ? HOUSE_FOOD_CAP : HOUSE_WATER_CAP;
         if (level > Math.floor(cap / 2)) continue;
         const folks = this.workers.filter((o) => o.data.home === house.id);
         // déjà quelqu'un en route pour la même chose
-        if (folks.some((o) => o.data.job?.type === "water" && !!o.data.job.food === food)) continue;
+        if (folks.some((o) => o.data.job?.type === "water" && o.data.job.dine === undefined && !!o.data.job.food === food)) continue;
         // les habitants sans emploi d'abord ; sinon un employé y va aussi (il reprend son travail ensuite)
         const free = folks.filter((o) => !o.resting && o.data.job?.type !== "water" && (o.data.carry === 0 || o.data.cargo === "water")).sort((x, y) => Number(!!x.data.workplace) - Number(!!y.data.workplace));
         const w = free[0];
@@ -2161,6 +2421,7 @@ export class Game {
 
   // Les employés d'un bâtiment.
   private employeesAt(kind: WorkplaceKind, id: number): Worker[] {
+    if (kind === "site" && id > 0) return this.workers.filter((w) => w.data.workplace?.kind === "site" && w.data.job?.type === "build" && w.data.job.siteId === id); // les bâtisseurs de ce chantier
     return this.workers.filter((w) => w.data.workplace?.kind === kind && w.data.workplace.id === id);
   }
 
@@ -2171,13 +2432,14 @@ export class Game {
 
   private workplaceExists(kind: WorkplaceKind, id: number): boolean {
     const s = this.save;
+    if (kind === "site" && id === 0) return true; // le poste de bâtisseur ne dépend d'aucun chantier en particulier
     const list: { id: number }[] =
-      kind === "camp" ? s.camps : kind === "lodge" ? s.lodges : kind === "apiary" ? s.apiaries : kind === "clinic" ? s.clinics : kind === "church" ? s.churches : kind === "farm" ? s.farms : kind === "stable" ? s.stables : kind === "pigpen" ? s.pigpens : kind === "site" ? s.sites.filter((t) => !t.undo) : kind === "depot" || kind === "gather" ? s.depots : kind === "port" ? s.ports : kind === "sawmill" ? s.sawmills : s.butchers;
+      kind === "camp" ? s.camps : kind === "lodge" ? s.lodges : kind === "apiary" ? s.apiaries : kind === "clinic" ? s.clinics : kind === "church" ? s.churches : kind === "farm" ? s.farms : kind === "stable" ? s.stables : kind === "pigpen" ? s.pigpens : kind === "tavern" ? s.taverns : kind === "site" ? s.sites.filter((t) => !t.undo) : kind === "depot" || kind === "gather" ? s.depots : kind === "port" ? s.ports : kind === "sawmill" ? s.sawmills : s.butchers;
     return list.some((m) => m.id === id);
   }
 
   private workplaceName(kind: WorkplaceKind): string {
-    return tl({ camp: "camp de bûcheron", lodge: "camp de chasseur", apiary: "rucher", clinic: "maison du soigneur", church: "église", farm: "ferme", stable: "étable", pigpen: "porcherie", site: "chantier", depot: "dépôt", gather: "dépôt (cueillette)", port: "port", sawmill: "scierie", butcher: "boucherie" }[kind]);
+    return tl({ camp: "camp de bûcheron", lodge: "camp de chasseur", apiary: "rucher", clinic: "maison du soigneur", church: "église", farm: "ferme", stable: "étable", pigpen: "porcherie", tavern: "taverne", site: "chantier", depot: "dépôt", gather: "dépôt (cueillette)", port: "port", sawmill: "scierie", butcher: "boucherie" }[kind]);
   }
 
   // Donne à l'employé le travail de son poste.
@@ -2193,7 +2455,14 @@ export class Game {
     else if (kind === "farm") w.startFarm(id, this.env);
     else if (kind === "stable") w.startTend(id, this.env);
     else if (kind === "pigpen") w.startSwine(id, this.env);
-    else if (kind === "site") w.startBuild(id, this.env);
+    else if (kind === "tavern") w.startCook(id, this.env);
+    else if (kind === "site") {
+      // il prend le chantier qui a le moins de bâtisseurs ; s'il n'y en a pas, il attend qu'on en pose un
+      const sites = s.sites.filter((t) => !t.undo);
+      const load = (siteId: number) => this.workers.filter((o) => o !== w && o.data.job?.type === "build" && o.data.job.siteId === siteId).length;
+      const next = [...sites].sort((a, b) => load(a.id) - load(b.id))[0];
+      if (next) w.startBuild(next.id, this.env);
+    }
     else if (kind === "gather") w.startGather(id, this.env);
     else if (kind === "depot" || kind === "port") w.startHaul(0, this.env, "any"); // le porteur transporte tout
     else w.startCraft(kind, id, this.env);
@@ -2201,6 +2470,7 @@ export class Game {
 
   // Embauche un villageois dans ce bâtiment (s'il reste un poste) ; s'il avait un autre emploi, il le quitte.
   private hire(w: Worker, kind: WorkplaceKind, id: number): boolean {
+    if (kind === "site") id = 0; // un bâtisseur est un bâtisseur : il va de chantier en chantier
     if (!this.workplaceExists(kind, id)) return false;
     const already = w.data.workplace?.kind === kind && w.data.workplace.id === id;
     if (!already && this.employeesAt(kind, id).length >= JOBS[kind].slots) {
@@ -2231,6 +2501,7 @@ export class Game {
     for (const w of this.workers) {
       const p = w.data.workplace;
       if (!p) continue;
+      if (p.kind === "site" && p.id !== 0) w.data.workplace = { kind: "site", id: 0 }; // anciennes parties : bâtisseur d'un chantier précis
       if (!this.workplaceExists(p.kind, p.id)) {
         w.data.workplace = undefined; // chantier terminé, bâtiment démonté : il est de nouveau sans emploi
         w.stop(this.env);
@@ -2250,7 +2521,7 @@ export class Game {
       let p: { kind: WorkplaceKind; id: number } | null = null;
       if (j.type === "hunt" && s.lodges.some((k) => k.id === j.lodgeId)) p = { kind: "lodge", id: j.lodgeId };
       else if (j.type === "bee" && s.apiaries.some((k) => k.id === j.apiaryId)) p = { kind: "apiary", id: j.apiaryId };
-      else if (j.type === "build" && s.sites.some((k) => k.id === j.siteId)) p = { kind: "site", id: j.siteId };
+      else if (j.type === "build" && s.sites.some((k) => k.id === j.siteId)) p = { kind: "site", id: 0 };
       else if (j.type === "haul" && (s.depots[0] || s.ports[0])) p = s.depots[0] ? { kind: "depot", id: s.depots[0].id } : { kind: "port", id: s.ports[0].id };
       else if (j.type === "wood" && s.camps[0]) p = { kind: "camp", id: s.camps[0].id };
       if (p) w.data.workplace = p;
@@ -2301,11 +2572,11 @@ export class Game {
             ]
           : port
             ? [
-                ...s.depots.map((d): Src => ({ kind: "depot", id: d.id, e: depotEntrance(d), stock: exportableTotal("depot", d, port) })),
-                ...s.sawmills.map((m): Src => ({ kind: "sawmill", id: m.id, e: sawmillEntrance(m), stock: exportableTotal("sawmill", m, port) })),
-                ...s.butchers.map((m): Src => ({ kind: "butcher", id: m.id, e: butcherEntrance(m), stock: exportableTotal("butcher", m, port) })),
-                ...s.camps.map((c): Src => ({ kind: "camp", id: c.id, e: campEntrance(c), stock: exportableTotal("camp", c, port) })),
-                ...s.lodges.map((m): Src => ({ kind: "lodge", id: m.id, e: lodgeEntrance(m), stock: exportableTotal("lodge", m, port) })),
+                ...s.depots.map((d): Src => ({ kind: "depot", id: d.id, e: depotEntrance(d), stock: exportableTotal("depot", d, port, s) })),
+                ...s.sawmills.map((m): Src => ({ kind: "sawmill", id: m.id, e: sawmillEntrance(m), stock: exportableTotal("sawmill", m, port, s) })),
+                ...s.butchers.map((m): Src => ({ kind: "butcher", id: m.id, e: butcherEntrance(m), stock: exportableTotal("butcher", m, port, s) })),
+                ...s.camps.map((c): Src => ({ kind: "camp", id: c.id, e: campEntrance(c), stock: exportableTotal("camp", c, port, s) })),
+                ...s.lodges.map((m): Src => ({ kind: "lodge", id: m.id, e: lodgeEntrance(m), stock: exportableTotal("lodge", m, port, s) })),
               ]
             : [
                 ...s.sawmills.map((m): Src => ({ kind: "sawmill", id: m.id, e: sawmillEntrance(m), stock: m.planks })),
@@ -2399,6 +2670,14 @@ export class Game {
         return m ? harvestApiary(m, max) : 0;
       },
       // éleveur
+      tavernInfo: (id) => this.save.taverns.some((k) => k.id === id),
+      tavernPlan: (id, from, w) => this.tavernPlan(id, from, w),
+      tavernDo: (plan, w) => this.tavernDo(plan, w),
+      dinePlan: (id, _from, _w) => {
+        const t = this.save.taverns.find((k) => k.id === id);
+        return t && dishCount(t) > 0 ? { type: "eat", target: tavernEntrance(t) } : null;
+      },
+      dineDo: (plan, w) => this.dineDo(plan, w),
       pigInfo: (id) => this.save.pigpens.some((k) => k.id === id),
       pigPlan: (id, from, w) => this.pigPlan(id, from, w),
       pigDo: (plan, w) => this.pigDo(plan, w),
@@ -2467,11 +2746,12 @@ export class Game {
       exportGood: (src, portId) => {
         const p = this.save.ports.find((k) => k.id === portId);
         const o = this.exportSource(src.kind, src.id);
-        return p && o ? exportableOf(src.kind, o, p)?.good ?? null : null;
+        return p && o ? exportableOf(src.kind, o, p, this.save)?.good ?? null : null;
       },
       takeGood: (src, good, max) => {
         const o = this.exportSource(src.kind, src.id);
-        const n = o ? takeGood(src.kind, o, good, max) : 0;
+        const keep = Math.max(0, ...this.save.ports.map((p) => portReserve(p, good))); // le stock minimum à garder au village
+        const n = o ? takeGood(src.kind, o, good, Math.min(max, Math.max(0, villageStock(this.save, good) - keep))) : 0;
         if (n > 0) persist(this.save);
         return n;
       },
@@ -2733,6 +3013,8 @@ export class Game {
       const hut = lodgeAt(this.save, c.gx, c.gy);
       const shop = butcherAt(this.save, c.gx, c.gy);
       const dock = portAt(this.save, c.gx, c.gy);
+      const taverne = tavernAt(this.save, c.gx, c.gy);
+      const cale = shipyardAt(this.save, c.gx, c.gy);
       const halle = marketAt(this.save, c.gx, c.gy);
       const truie = pigpenAt(this.save, c.gx, c.gy);
       const etable = stableAt(this.save, c.gx, c.gy);
@@ -2740,7 +3022,13 @@ export class Game {
       const minster = churchAt(this.save, c.gx, c.gy);
       const infirm = clinicAt(this.save, c.gx, c.gy);
       const hive = apiaryAt(this.save, c.gx, c.gy);
-      if (halle) {
+      if (taverne) {
+        removeTavern(this.save, taverne);
+        if (this.tavernSel === taverne) this.tavernSel = null;
+      } else if (cale) {
+        removeShipyard(this.save, cale);
+        if (this.shipSel === cale) this.shipSel = null;
+      } else if (halle) {
         removeMarket(this.save, halle);
         if (this.marketSel === halle) this.marketSel = null;
       } else if (truie) {
@@ -2795,12 +3083,12 @@ export class Game {
     }
     const kind = STRUCTURES[sel].kind;
     const r =
-      kind === "camp" ? placeCamp(this.save, c.gx, c.gy, false, this.buildRot) : kind === "depot" ? placeDepot(this.save, c.gx, c.gy, false, this.buildRot) : kind === "house" ? placeHouse(this.save, c.gx, c.gy, false, this.buildRot) : kind === "sawmill" ? placeSawmill(this.save, c.gx, c.gy, false, this.buildRot) : kind === "well" ? placeWell(this.save, c.gx, c.gy, false, this.buildRot) : kind === "lodge" ? placeLodge(this.save, c.gx, c.gy, false, this.buildRot) : kind === "butcher" ? placeButcher(this.save, c.gx, c.gy, false, this.buildRot) : kind === "port" ? placePort(this.save, c.gx, c.gy) : kind === "apiary" ? placeApiary(this.save, c.gx, c.gy, false, this.buildRot) : kind === "clinic" ? placeClinic(this.save, c.gx, c.gy, false, this.buildRot) : kind === "church" ? placeChurch(this.save, c.gx, c.gy, false, this.buildRot) : kind === "farm" ? placeFarm(this.save, c.gx, c.gy, false, this.buildRot) : kind === "stable" ? placeStable(this.save, c.gx, c.gy, false, this.buildRot) : kind === "pigpen" ? placePigpen(this.save, c.gx, c.gy, false, this.buildRot) : kind === "market" ? placeMarket(this.save, c.gx, c.gy, false, this.buildRot) : placeRoad(this.save, c.gx, c.gy);
+      kind === "camp" ? placeCamp(this.save, c.gx, c.gy, false, this.buildRot) : kind === "depot" ? placeDepot(this.save, c.gx, c.gy, false, this.buildRot) : kind === "house" ? placeHouse(this.save, c.gx, c.gy, false, this.buildRot) : kind === "sawmill" ? placeSawmill(this.save, c.gx, c.gy, false, this.buildRot) : kind === "well" ? placeWell(this.save, c.gx, c.gy, false, this.buildRot) : kind === "lodge" ? placeLodge(this.save, c.gx, c.gy, false, this.buildRot) : kind === "butcher" ? placeButcher(this.save, c.gx, c.gy, false, this.buildRot) : kind === "port" ? placePort(this.save, c.gx, c.gy) : kind === "apiary" ? placeApiary(this.save, c.gx, c.gy, false, this.buildRot) : kind === "clinic" ? placeClinic(this.save, c.gx, c.gy, false, this.buildRot) : kind === "church" ? placeChurch(this.save, c.gx, c.gy, false, this.buildRot) : kind === "farm" ? placeFarm(this.save, c.gx, c.gy, false, this.buildRot) : kind === "stable" ? placeStable(this.save, c.gx, c.gy, false, this.buildRot) : kind === "pigpen" ? placePigpen(this.save, c.gx, c.gy, false, this.buildRot) : kind === "market" ? placeMarket(this.save, c.gx, c.gy, false, this.buildRot) : kind === "tavern" ? placeTavern(this.save, c.gx, c.gy, false, this.buildRot) : kind === "pantry" ? placePantry(this.save, c.gx, c.gy, false, this.buildRot) : kind === "shipyard" ? placeShipyard(this.save, ...((p) => [p.gx, p.gy] as [number, number])(shipyardSpot(this.save, c.gx, c.gy) ?? c)) : placeRoad(this.save, c.gx, c.gy);
     if (r === "ok") {
       if (sel !== ERASE) clearBerries(this.save, c.gx, c.gy, STRUCTURES[sel].size, STRUCTURES[sel].size, STRUCTURES[sel].kind === "road" ? 0 : 1); // un arbuste à baies sur l'emplacement (ou devant l'entrée) disparaît
       persist(this.save);
     }
-    else if (r !== "already") this.floatText(cx, cy, BUILD_MESSAGES[r]);
+    else if (r !== "already") this.floatText(cx, cy, kind === "shipyard" && r === "terrain" ? "Il faut une côte dégagée : 6 × 6 cases d'herbe ou de sable, sans arbre, avec de l'eau le long d'un côté." : BUILD_MESSAGES[r]);
   }
 
   private floatText(x: number, y: number, text: string) {
@@ -2838,6 +3126,16 @@ export class Game {
     if (tickFarms(this.save, dt * this.timeScale, this.season().index) && !this.dirtyAt) this.dirtyAt = performance.now();
     tickStables(this.save, dt * this.timeScale, this.season().index);
     tickPigpens(this.save, dt * this.timeScale);
+    this.pantryT -= dt;
+    if (this.pantryT <= 0) {
+      this.pantryT = 1;
+      if (consolidateFood(this.save)) persist(this.save); // la nourriture des dépôts est rangée au garde-manger
+    }
+    if (this.portOpen && performance.now() - this.portRefresh > 1000) {
+      this.portRefresh = performance.now();
+      this.renderPort(); // les stocks et le décompte du bateau se mettent à jour
+    }
+    this.checkGoals(dt);
     for (const ev of tickMarkets(this.save, dt * this.timeScale)) {
       toast(ev.arrived ? "🛒 Une caravane de marchands est arrivée au marché !" : "🛒 La caravane a quitté le marché.");
       persist(this.save);
@@ -2866,6 +3164,7 @@ export class Game {
     if (this.errandT <= 0) {
       this.errandT = 2;
       this.autoErrands();
+      this.autoDining();
     }
     this.homeT -= dt;
     if (this.homeT <= 0) {
@@ -2961,12 +3260,37 @@ export class Game {
       g.stroke();
     }
 
-    drawRoads(g, this.save.roads, GRID, view);
-    for (const d of this.save.depots) drawDepot(g, d.gx, d.gy, d.rot, depotLevel(d));
+    // les portes de tous les bâtiments (le chemin s'y prolonge toujours d'une case de terre battue)
+    const sv0 = this.save;
+    const doors: [number, number, number][] = [];
+    if (isViking()) {
+      const add = (e: Pos, rot = 0) => doors.push([e.gx, e.gy, rot]);
+      for (const m of sv0.camps) add(campEntrance(m), m.rot);
+      for (const m of sv0.depots) add(depotEntrance(m), m.rot);
+      for (const m of sv0.houses) add(houseEntrance(m), m.rot);
+      for (const m of sv0.sawmills) add(sawmillEntrance(m), m.rot);
+      for (const m of sv0.wells) add(wellEntrance(m), m.rot);
+      for (const m of sv0.lodges) add(lodgeEntrance(m), m.rot);
+      for (const m of sv0.butchers) add(butcherEntrance(m), m.rot);
+      for (const m of sv0.ports) add(portEntrance(m), m.rot);
+      for (const m of sv0.apiaries) add(apiaryEntrance(m), m.rot);
+      for (const m of sv0.clinics) add(clinicEntrance(m), m.rot);
+      for (const m of sv0.churches) add(churchEntrance(m), m.rot);
+      for (const m of sv0.farms) add(farmEntrance(m), m.rot);
+      for (const m of sv0.stables) add(stableEntrance(m), m.rot);
+      for (const m of sv0.pigpens) add(pigpenEntrance(m), m.rot);
+      for (const m of sv0.markets) add(marketEntrance(m), m.rot);
+      for (const m of sv0.taverns) add(tavernEntrance(m), m.rot);
+      for (const m of sv0.shipyards) add(shipyardEntrance(m), m.rot);
+    }
+    drawRoads(g, this.save.roads, GRID, view, doors);
+    for (const d of this.save.depots) drawDepot(g, d.gx, d.gy, d.rot, depotLevel(d), !!d.pantry);
     for (const c of this.save.camps) drawCamp(g, c.gx, c.gy, c.rot);
     for (const m of this.save.apiaries) drawApiary(g, m.gx, m.gy, apiaryBusy(m, this.season().rules.honey), t, m.rot);
     for (const m of this.save.clinics) drawClinic(g, m.gx, m.gy, m.rot, this.workers.some((w) => w.brewing && w.data.job?.type === "heal" && w.data.job.clinicId === m.id), t);
     for (const m of this.save.churches) drawChurch(g, m.gx, m.gy, m.rot, m.graves.length);
+    for (const m of this.save.taverns) drawTavern(g, m.gx, m.gy, m.rot, this.workers.some((w) => w.cooking && w.data.job?.type === "cook" && w.data.job.tavernId === m.id), t);
+    for (const m of this.save.shipyards) drawShipyard(g, m.gx, m.gy, m.rot, m.stage, t);
     for (const m of this.save.markets) {
       drawMarket(g, m.gx, m.gy, m.rot, m.here, t);
       // la caravane arrive par la gauche, s'installe à côté du marché, puis repart par la droite
@@ -2999,21 +3323,6 @@ export class Game {
       const deco = (kind: Parameters<typeof drawVikingDeco>[1], list: { gx: number; gy: number }[], size: number) => {
         for (const m of list) drawVikingDeco(g, kind, m.gx, m.gy, size, t);
       };
-      deco("depot", sv.depots, 3);
-      deco("camp", sv.camps, 2);
-      deco("apiary", sv.apiaries, 2);
-      deco("clinic", sv.clinics, 2);
-      deco("church", sv.churches, 3);
-      deco("stable", sv.stables, 4);
-      deco("pigpen", sv.pigpens, 4);
-      deco("market", sv.markets, 3);
-      deco("farm", sv.farms, 5);
-      deco("port", sv.ports, 3);
-      deco("butcher", sv.butchers, 3);
-      deco("lodge", sv.lodges, 2);
-      deco("well", sv.wells, 2);
-      deco("sawmill", sv.sawmills, 3);
-      deco("house", sv.houses, 2);
     }
     // une maison sans eau : une goutte dessinée (pas un emoji) posée sur le toit, dont l'opacité oscille entre 90 et 100 %
     for (const h of this.save.houses) {
@@ -3214,15 +3523,17 @@ export class Game {
   }
 
   // Aperçu de la structure qu'on s'apprête à poser, rouge si c'est impossible.
-  private drawGhost(g: CanvasRenderingContext2D, kind: "camp" | "depot" | "road" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market", at: Pos, cost: number) {
+  private drawGhost(g: CanvasRenderingContext2D, kind: "camp" | "depot" | "road" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market" | "shipyard" | "tavern" | "pantry", at: Pos, cost: number) {
     const s = this.save;
-    const size = kind === "market" ? 3 : kind === "stable" || kind === "pigpen" ? STABLE_SIZE : kind === "farm" ? FARM_SIZE : kind === "camp" || kind === "house" || kind === "well" || kind === "lodge" || kind === "apiary" || kind === "clinic" ? 2 : kind === "depot" || kind === "sawmill" || kind === "butcher" || kind === "port" || kind === "church" ? 3 : 1;
+    if (kind === "shipyard") at = shipyardSpot(s, at.gx, at.gy) ?? at; // le plan se cale tout seul sur la côte la plus proche
+    const size = kind === "pantry" || kind === "tavern" ? 3 : kind === "shipyard" ? SHIPYARD_SIZE : kind === "market" ? 3 : kind === "stable" || kind === "pigpen" ? STABLE_SIZE : kind === "farm" ? FARM_SIZE : kind === "camp" || kind === "house" || kind === "well" || kind === "lodge" || kind === "apiary" || kind === "clinic" ? 2 : kind === "depot" || kind === "sawmill" || kind === "butcher" || kind === "port" || kind === "church" ? 3 : 1;
     const affordable = s.coins >= cost;
-    const ok = affordable && (kind === "camp" ? canPlaceCamp(s, at.gx, at.gy, this.buildRot) : kind === "depot" ? canPlaceDepot(s, at.gx, at.gy, this.buildRot) : kind === "house" ? canPlaceHouse(s, at.gx, at.gy, this.buildRot) : kind === "sawmill" ? canPlaceSawmill(s, at.gx, at.gy, this.buildRot) : kind === "well" ? canPlaceWell(s, at.gx, at.gy, this.buildRot) : kind === "lodge" ? canPlaceLodge(s, at.gx, at.gy, this.buildRot) : kind === "butcher" ? canPlaceButcher(s, at.gx, at.gy, this.buildRot) : kind === "port" ? canPlacePort(s, at.gx, at.gy) : kind === "apiary" ? canPlaceApiary(s, at.gx, at.gy, this.buildRot) : kind === "clinic" ? canPlaceClinic(s, at.gx, at.gy, this.buildRot) : kind === "church" ? canPlaceChurch(s, at.gx, at.gy, this.buildRot) : kind === "farm" ? canPlaceFarm(s, at.gx, at.gy, this.buildRot) : kind === "stable" ? canPlaceStable(s, at.gx, at.gy, this.buildRot) : kind === "pigpen" ? canPlacePigpen(s, at.gx, at.gy, this.buildRot) : kind === "market" ? canPlaceMarket(s, at.gx, at.gy, this.buildRot) : canPlaceRoad(s, at.gx, at.gy));
+    const ok = affordable && (kind === "camp" ? canPlaceCamp(s, at.gx, at.gy, this.buildRot) : kind === "depot" ? canPlaceDepot(s, at.gx, at.gy, this.buildRot) : kind === "house" ? canPlaceHouse(s, at.gx, at.gy, this.buildRot) : kind === "sawmill" ? canPlaceSawmill(s, at.gx, at.gy, this.buildRot) : kind === "well" ? canPlaceWell(s, at.gx, at.gy, this.buildRot) : kind === "lodge" ? canPlaceLodge(s, at.gx, at.gy, this.buildRot) : kind === "butcher" ? canPlaceButcher(s, at.gx, at.gy, this.buildRot) : kind === "port" ? canPlacePort(s, at.gx, at.gy) : kind === "apiary" ? canPlaceApiary(s, at.gx, at.gy, this.buildRot) : kind === "clinic" ? canPlaceClinic(s, at.gx, at.gy, this.buildRot) : kind === "church" ? canPlaceChurch(s, at.gx, at.gy, this.buildRot) : kind === "farm" ? canPlaceFarm(s, at.gx, at.gy, this.buildRot) : kind === "stable" ? canPlaceStable(s, at.gx, at.gy, this.buildRot) : kind === "pigpen" ? canPlacePigpen(s, at.gx, at.gy, this.buildRot) : kind === "market" ? canPlaceMarket(s, at.gx, at.gy, this.buildRot) : kind === "tavern" ? canPlaceTavern(s, at.gx, at.gy, this.buildRot) : kind === "pantry" ? canPlaceDepot(s, at.gx, at.gy, this.buildRot) : kind === "shipyard" ? canPlaceShipyard(s, at.gx, at.gy) : canPlaceRoad(s, at.gx, at.gy));
     this.drawNuisanceGhost(g, kind, at, size);
     g.globalAlpha = 0.65;
     if (kind === "camp") drawCamp(g, at.gx, at.gy, this.buildRot);
     else if (kind === "depot") drawDepot(g, at.gx, at.gy, this.buildRot);
+    else if (kind === "pantry") drawDepot(g, at.gx, at.gy, this.buildRot, 1, true);
     else if (kind === "house") drawHouse(g, at.gx, at.gy, false, 0, this.buildRot);
     else if (kind === "sawmill") drawSawmill(g, at.gx, at.gy, false, 0, this.buildRot);
     else if (kind === "well") drawWell(g, at.gx, at.gy, this.buildRot);
@@ -3236,6 +3547,8 @@ export class Game {
     else if (kind === "stable") drawStable(g, at.gx, at.gy, this.buildRot);
     else if (kind === "pigpen") drawPigpen(g, at.gx, at.gy, this.buildRot);
     else if (kind === "market") drawMarket(g, at.gx, at.gy, this.buildRot);
+    else if (kind === "tavern") drawTavern(g, at.gx, at.gy, this.buildRot);
+    else if (kind === "shipyard") drawShipyard(g, at.gx, at.gy, Math.max(0, shipyardRot(s, at.gx, at.gy)));
     else drawRoadCell(g, at.gx, at.gy);
     g.globalAlpha = 1;
     if (!ok) {
@@ -3245,7 +3558,7 @@ export class Game {
     // où sera l'entrée : c'est là qu'il faudra amener un chemin
     if (kind !== "road") {
       const spot = { gx: at.gx, gy: at.gy, rot: this.buildRot };
-      const e = kind === "camp" ? campEntrance(spot) : kind === "house" ? houseEntrance(spot) : kind === "sawmill" ? sawmillEntrance(spot) : kind === "well" ? wellEntrance(spot) : kind === "lodge" ? lodgeEntrance(spot) : kind === "butcher" ? butcherEntrance(spot) : kind === "port" ? portEntrance({ ...spot, rot: Math.max(0, portRot(s, at.gx, at.gy)) }) : kind === "apiary" ? apiaryEntrance(spot) : kind === "clinic" ? clinicEntrance(spot) : kind === "church" ? churchEntrance(spot) : kind === "farm" ? farmEntrance(spot) : kind === "stable" ? stableEntrance(spot) : kind === "pigpen" ? pigpenEntrance(spot) : kind === "market" ? marketEntrance(spot) : depotEntrance(spot);
+      const e = kind === "camp" ? campEntrance(spot) : kind === "house" ? houseEntrance(spot) : kind === "sawmill" ? sawmillEntrance(spot) : kind === "well" ? wellEntrance(spot) : kind === "lodge" ? lodgeEntrance(spot) : kind === "butcher" ? butcherEntrance(spot) : kind === "port" ? portEntrance({ ...spot, rot: Math.max(0, portRot(s, at.gx, at.gy)) }) : kind === "apiary" ? apiaryEntrance(spot) : kind === "clinic" ? clinicEntrance(spot) : kind === "church" ? churchEntrance(spot) : kind === "farm" ? farmEntrance(spot) : kind === "stable" ? stableEntrance(spot) : kind === "pigpen" ? pigpenEntrance(spot) : kind === "market" ? marketEntrance(spot) : kind === "tavern" ? tavernEntrance(spot) : kind === "shipyard" ? shipyardEntrance({ ...spot, rot: Math.max(0, shipyardRot(s, at.gx, at.gy)) }) : depotEntrance(spot);
       drawEntrance(g, e.gx, e.gy, roadAt(s, e.gx, e.gy), performance.now(), this.buildRot);
     }
   }
@@ -3310,7 +3623,7 @@ export class Game {
       g.arc(dest[0] * C, dest[1] * C, C * (0.2 + 0.08 * pulse), 0, Math.PI * 2);
       g.stroke();
     }
-    for (const w of [...this.workers].filter((o) => !o.inside && !o.crafting && !o.brewing).sort((a, b) => a.y - b.y)) w.draw(g, w === this.selected, t);
+    for (const w of [...this.workers].filter((o) => !o.inside && !o.crafting && !o.brewing && !o.cooking).sort((a, b) => a.y - b.y)) w.draw(g, w === this.selected, t);
     for (const l of this.leavers) {
       g.globalAlpha = l.t < 5 ? 1 : Math.max(0, 1 - (l.t - 5) / 4); // il s'efface dans le lointain
       l.w.draw(g, false, t);
@@ -3339,6 +3652,8 @@ export class Game {
       for (const m of s.stables) show(stableEntrance(m), m.rot);
       for (const m of s.pigpens) show(pigpenEntrance(m), m.rot);
       for (const m of s.markets) show(marketEntrance(m), m.rot);
+      for (const m of s.taverns) show(tavernEntrance(m), m.rot);
+      for (const m of s.shipyards) show(shipyardEntrance(m), m.rot);
     } else {
       if (this.apiarySel) show(apiaryEntrance(this.apiarySel), this.apiarySel.rot);
       if (this.clinicSel) show(clinicEntrance(this.clinicSel), this.clinicSel.rot);
@@ -3347,6 +3662,8 @@ export class Game {
       if (this.stableSel) show(stableEntrance(this.stableSel), this.stableSel.rot);
       if (this.pigpenSel) show(pigpenEntrance(this.pigpenSel), this.pigpenSel.rot);
       if (this.marketSel) show(marketEntrance(this.marketSel), this.marketSel.rot);
+      if (this.tavernSel) show(tavernEntrance(this.tavernSel), this.tavernSel.rot);
+      if (this.shipSel) show(shipyardEntrance(this.shipSel), this.shipSel.rot);
       if (this.portSel) show(portEntrance(this.portSel), this.portSel.rot);
       if (this.butcherSel) show(butcherEntrance(this.butcherSel), this.butcherSel.rot);
       if (this.lodgeSel) show(lodgeEntrance(this.lodgeSel), this.lodgeSel.rot);
@@ -3382,6 +3699,16 @@ export class Game {
       g.rect(this.apiarySel.gx * C - 4, this.apiarySel.gy * C - 4, 2 * C + 8, 2 * C + 8);
       outline();
       this.drawNuisanceGhost(g, "apiary", this.apiarySel, 2);
+    }
+    if (this.tavernSel) {
+      g.beginPath();
+      g.rect(this.tavernSel.gx * C - 4, this.tavernSel.gy * C - 4, 3 * C + 8, 3 * C + 8);
+      outline();
+    }
+    if (this.shipSel) {
+      g.beginPath();
+      g.rect(this.shipSel.gx * C - 4, this.shipSel.gy * C - 4, SHIPYARD_SIZE * C + 8, SHIPYARD_SIZE * C + 8);
+      outline();
     }
     if (this.marketSel) {
       g.beginPath();
@@ -3518,6 +3845,14 @@ export class Game {
       g.fillStyle = "#e6b84a";
       g.fillRect((m.gx * C + C) * k - 2.5, (m.gy * C + C) * k - 2.5, 5, 5);
     }
+    for (const m of this.save.taverns) {
+      g.fillStyle = "#c9784a";
+      g.fillRect((m.gx * C + 1.5 * C) * k - 3, (m.gy * C + 1.5 * C) * k - 3, 6, 6);
+    }
+    for (const m of this.save.shipyards) {
+      g.fillStyle = "#5a7fa8";
+      g.fillRect((m.gx * C + 3 * C) * k - 4, (m.gy * C + 3 * C) * k - 4, 8, 8);
+    }
     for (const m of this.save.markets) {
       g.fillStyle = m.here ? "#e8c24e" : "#c0453a";
       g.fillRect((m.gx * C + 1.5 * C) * k - 3, (m.gy * C + 1.5 * C) * k - 3, 6, 6);
@@ -3603,6 +3938,10 @@ export class Game {
                   ? "boucherie"
                   : portAt(s, cell.gx, cell.gy)
                     ? "port"
+                    : tavernAt(s, cell.gx, cell.gy)
+                      ? "taverne"
+                    : shipyardAt(s, cell.gx, cell.gy)
+                      ? "chantier du grand drakkar"
                     : marketAt(s, cell.gx, cell.gy)
                       ? "marché"
                     : pigpenAt(s, cell.gx, cell.gy)
@@ -3652,6 +3991,10 @@ export class Game {
     if (!shop) this.butcherSel = null;
     const port = this.portSel && this.save.ports.includes(this.portSel) ? this.portSel : null;
     if (!port) this.portSel = null;
+    const tavern = this.tavernSel && this.save.taverns.includes(this.tavernSel) ? this.tavernSel : null;
+    if (!tavern) this.tavernSel = null;
+    const ship = this.shipSel && this.save.shipyards.includes(this.shipSel) ? this.shipSel : null;
+    if (!ship) this.shipSel = null;
     const market = this.marketSel && this.save.markets.includes(this.marketSel) ? this.marketSel : null;
     if (!market) this.marketSel = null;
     const pigpen = this.pigpenSel && this.save.pigpens.includes(this.pigpenSel) ? this.pigpenSel : null;
@@ -3666,7 +4009,7 @@ export class Game {
     if (!clinic) this.clinicSel = null;
     const apiary = this.apiarySel && this.save.apiaries.includes(this.apiarySel) ? this.apiarySel : null;
     if (!apiary) this.apiarySel = null;
-    if (!camp && !depot && !site && !house && !mill && !well && !lodge && !shop && !port && !apiary && !clinic && !church && !farm && !stable && !pigpen && !market) {
+    if (!camp && !depot && !site && !house && !mill && !well && !lodge && !shop && !port && !apiary && !clinic && !church && !farm && !stable && !pigpen && !market && !ship && !tavern) {
       if (!this.selected) {
         this.hideMenu(box);
         this.menuSig = "";
@@ -3676,10 +4019,10 @@ export class Game {
     const crew = this.workers.map((w) => w.name + w.role + (w.working ? 1 : 0)).join(",");
     const net = `${Object.keys(this.save.roads).length}/${this.save.camps.length}/${this.save.depots.length}/${this.save.houses.length}`;
     const sickKey = this.workers.filter((w) => w.data.illness).map((w) => w.data.id + w.data.illness!.kind + Math.round(w.data.illness!.sev / 5)).join(",");
-    const sig = market ? `k${market.id}/${market.here ? 1 : 0}/${Math.floor(market.clock / 5)}/${Object.values(market.stock).join("-")}/${Object.values(market.wants).join("-")}/${Math.floor(market.purse)}/${this.save.coins}/${this.save.depots.reduce((a, d) => a + depotFree(d), 0)}/${net}` : pigpen ? `g${pigpen.id}/${pigpen.pigs.map((p) => (pigAdult(p) ? 2 : 0) + (pigFed(p) ? 1 : 0) + (pigWatered(p) ? 1 : 0)).join("")}/${Math.floor(pigpen.feed)}/${Math.floor(pigpen.water)}/${pigpen.order}/${pigpen.auto ? 1 : 0}/${this.save.coins >= PIG_PRICE ? 1 : 0}/${net}/${crew}` : stable ? `v${stable.id}/${stable.cows.map((c) => (cowFed(c) ? 1 : 0) + (cowWatered(c) ? 1 : 0)).join("")}/${Math.floor(stable.feed)}/${Math.floor(stable.water)}/${stable.milk}/${net}/${crew}` : farm ? `f${farm.id}/${farm.crop}/${Math.floor(farm.water)}/${farm.plots.map((pl) => (pl.p < 0 ? "e" : pl.p >= 1 ? "r" : Math.floor(pl.p * 25)) + (pl.wet <= 0 ? "d" : "") + (pl.t ?? "-")[0]).join(",")}/${this.farmPick ?? "-"}/${this.season().index}/${net}/${crew}` : church ? `e${church.id}/${church.graves.length}/${this.save.corpses.length}/${net}/${crew}` : clinic ? `n${clinic.id}/${clinic.prevent === false ? 0 : 1}/${this.workers.map((w) => healSkill(w.data.xp ?? 0).level).join("")}/${clinic.berries}/${clinic.honey}/${clinic.tisane}/${clinic.syrup}/${sickKey}/${net}/${crew}` : apiary ? `a${apiary.id}/${apiary.honey}/${Math.floor(apiary.care / 5)}/${this.season().index}/${net}/${crew}` : port ? `p${port.id}/${EXPORT_LIST.map((g) => portStock(port, g) + ":" + portQuota(port, g)).join(",")}/${this.save.depots.reduce((a, d) => a + (d.planks ?? 0) + (d.cuts ?? 0) + (d.honey ?? 0) + (d.berries ?? 0) + cropTotal(d), 0) + this.save.camps.reduce((a, c) => a + c.wood, 0) + this.save.lodges.reduce((a, l) => a + l.meat, 0)}/${Math.floor(port.t / 4)}/${net}/${crew}` : shop ? `b${shop.id}/${shop.meat}/${shop.cuts}/${net}/${crew}` : lodge ? `l${lodge.id}/${lodge.meat}/${crew}/${Math.floor(this.animals.length / 5)}` : well ? `w${well.id}/${well.water}/${net}/${crew}` : mill ? `m${mill.id}/${mill.logs}/${mill.planks}/${net}/${crew}` : house ? `h${house.id}/${house.quarantine ? 1 : 0}/${sickKey}/${house.water ?? 0}/${house.food ?? 0}/${houseMood(this.save, house).mood}/${Math.round(Math.max(0, ...this.workers.filter((w) => w.data.home === house.id).map((w) => w.data.discontent ?? 0)) / 4)}/${this.workers.filter((w) => w.data.home === house.id && w.data.threat !== undefined).length}/${Math.floor(Math.max(0, ...this.workers.filter((w) => w.data.threat !== undefined).map((w) => w.data.threat ?? 0)) / 5)}/${crew}/${this.workers.map((w) => (w.inside ? 1 : 0) + "" + w.data.home).join("")}` : camp ? `c${camp.id}/${camp.wood}/${net}` : site ? `s${site.id}/${site.have}/${Math.floor(site.progress * 20)}/${net}/${crew}` : `d${depot!.id}/${depot!.wood}/${depot!.planks ?? 0}/${depot!.cuts ?? 0}/${depot!.honey ?? 0}/${depot!.berries ?? 0}/${depot!.milk ?? 0}/${depot!.meat ?? 0}/${Object.values(depot!.crops ?? {}).join("-")}/${depot!.level ?? 1}/${net}/${crew}`;
-    const crewAt: [string, number] | null = pigpen ? ["pigpen", pigpen.id] : stable ? ["stable", stable.id] : farm ? ["farm", farm.id] : church ? ["church", church.id] : clinic ? ["clinic", clinic.id] : apiary ? ["apiary", apiary.id] : port ? ["port", port.id] : shop ? ["butcher", shop.id] : lodge ? ["lodge", lodge.id] : well ? ["well", well.id] : mill ? ["sawmill", mill.id] : site ? ["site", site.id] : camp ? ["camp", camp.id] : depot ? ["depot", depot.id] : null;
+    const sig = tavern ? `t${tavern.id}/${RECIPES.map((r) => tavern.dishes[r.id] ?? 0).join("-")}/${Object.values(tavern.pantry).join("-")}/${net}/${crew}` : ship ? `y${ship.id}/${ship.stage}/${Object.values(ship.have).join("-")}/${this.save.depots.reduce((a, d) => a + (d.planks ?? 0) + (d.cuts ?? 0) + (d.honey ?? 0) + (d.berries ?? 0) + d.wood + cropTotal(d), 0)}/${net}` : market ? `k${market.id}/${market.here ? 1 : 0}/${Math.floor(market.clock / 30)}/${Object.values(market.stock).join("-")}/${Object.values(market.wants).join("-")}/${Math.floor(market.purse)}/${this.save.coins}/${this.save.depots.reduce((a, d) => a + depotFree(d), 0)}/${net}` : pigpen ? `g${pigpen.id}/${pigpen.pigs.map((p) => (pigAdult(p) ? 2 : 0) + (pigFed(p) ? 1 : 0) + (pigWatered(p) ? 1 : 0)).join("")}/${Math.floor(pigpen.feed)}/${Math.floor(pigpen.water)}/${pigpen.order}/${pigpen.auto ? 1 : 0}/${this.save.coins >= PIG_PRICE ? 1 : 0}/${net}/${crew}` : stable ? `v${stable.id}/${stable.cows.map((c) => (cowFed(c) ? 1 : 0) + (cowWatered(c) ? 1 : 0)).join("")}/${Math.floor(stable.feed)}/${Math.floor(stable.water)}/${stable.milk}/${net}/${crew}` : farm ? `f${farm.id}/${farm.crop}/${Math.floor(farm.water)}/${farm.plots.map((pl) => (pl.p < 0 ? "e" : pl.p >= 1 ? "r" : Math.floor(pl.p * 25)) + (pl.wet <= 0 ? "d" : "") + (pl.t ?? "-")[0]).join(",")}/${this.farmPick ?? "-"}/${this.season().index}/${net}/${crew}` : church ? `e${church.id}/${church.graves.length}/${this.save.corpses.length}/${net}/${crew}` : clinic ? `n${clinic.id}/${clinic.prevent === false ? 0 : 1}/${this.workers.map((w) => healSkill(w.data.xp ?? 0).level).join("")}/${clinic.berries}/${clinic.honey}/${clinic.tisane}/${clinic.syrup}/${sickKey}/${net}/${crew}` : apiary ? `a${apiary.id}/${apiary.honey}/${Math.floor(apiary.care / 5)}/${this.season().index}/${net}/${crew}` : port ? `p${port.id}/${EXPORT_LIST.map((g) => portStock(port, g) + ":" + portQuota(port, g)).join(",")}/${this.save.depots.reduce((a, d) => a + (d.planks ?? 0) + (d.cuts ?? 0) + (d.honey ?? 0) + (d.berries ?? 0) + cropTotal(d), 0) + this.save.camps.reduce((a, c) => a + c.wood, 0) + this.save.lodges.reduce((a, l) => a + l.meat, 0)}/${Math.floor(port.t / 4)}/${net}/${crew}` : shop ? `b${shop.id}/${shop.meat}/${shop.cuts}/${net}/${crew}` : lodge ? `l${lodge.id}/${lodge.meat}/${crew}/${Math.floor(this.animals.length / 5)}` : well ? `w${well.id}/${well.water}/${net}/${crew}` : mill ? `m${mill.id}/${mill.logs}/${mill.planks}/${net}/${crew}` : house ? `h${house.id}/${house.quarantine ? 1 : 0}/${sickKey}/${house.water ?? 0}/${house.food ?? 0}/${houseMood(this.save, house).mood}/${Math.round(Math.max(0, ...this.workers.filter((w) => w.data.home === house.id).map((w) => w.data.discontent ?? 0)) / 4)}/${this.workers.filter((w) => w.data.home === house.id && w.data.threat !== undefined).length}/${Math.floor(Math.max(0, ...this.workers.filter((w) => w.data.threat !== undefined).map((w) => w.data.threat ?? 0)) / 5)}/${crew}/${this.workers.map((w) => (w.inside ? 1 : 0) + "" + w.data.home).join("")}` : camp ? `c${camp.id}/${camp.wood}/${net}` : site ? `s${site.id}/${site.have}/${Math.floor(site.progress * 20)}/${net}/${crew}` : `d${depot!.id}/${depot!.wood}/${depot!.planks ?? 0}/${depot!.cuts ?? 0}/${depot!.honey ?? 0}/${depot!.berries ?? 0}/${depot!.milk ?? 0}/${depot!.meat ?? 0}/${Object.values(depot!.crops ?? {}).join("-")}/${depot!.level ?? 1}/${net}/${crew}`;
+    const crewAt: [string, number] | null = tavern ? ["tavern", tavern.id] : pigpen ? ["pigpen", pigpen.id] : stable ? ["stable", stable.id] : farm ? ["farm", farm.id] : church ? ["church", church.id] : clinic ? ["clinic", clinic.id] : apiary ? ["apiary", apiary.id] : port ? ["port", port.id] : shop ? ["butcher", shop.id] : lodge ? ["lodge", lodge.id] : well ? ["well", well.id] : mill ? ["sawmill", mill.id] : site ? ["site", site.id] : camp ? ["camp", camp.id] : depot ? ["depot", depot.id] : null;
     const work = crewAt && crewAt[0] !== "well" ? `${this.employeesAt(crewAt[0] as WorkplaceKind, crewAt[1]).map((w) => w.data.id).join(",")}${crewAt[0] === "depot" ? "+" + this.employeesAt("gather", crewAt[1]).map((w) => w.data.id).join(",") : ""}|${this.recruitOpen ? this.workers.filter((o) => !o.data.workplace).map((o) => o.data.id).join(",") : "-"}` : "";
-    const full = sig + "/" + work + "/" + ((market ?? pigpen ?? stable ?? farm ?? church ?? clinic ?? apiary ?? port ?? shop ?? lodge ?? well ?? mill ?? house ?? camp ?? site ?? depot)?.rot ?? 0);
+    const full = sig + "/" + work + "/" + ((tavern ?? ship ?? market ?? pigpen ?? stable ?? farm ?? church ?? clinic ?? apiary ?? port ?? shop ?? lodge ?? well ?? mill ?? house ?? camp ?? site ?? depot)?.rot ?? 0);
     if (full !== this.menuSig) {
       this.menuSig = full;
       box.textContent = "";
@@ -3731,7 +4074,43 @@ export class Game {
       const linkChip = (label: string, e: Pos, targets: Pos[]): Chip => (hasRoad(e) && targets.some((t) => this.linkedTo(e, [t])) ? [`Relié · ${label}`, "ok"] : [`Non relié · ${label}`, "bad"]);
       const folksOf = (pred: (w: Worker) => boolean) => this.workers.filter(pred).length;
 
-      if (market) {
+      if (tavern) {
+        const total = dishCount(tavern);
+        head("🍺", "Taverne", [[`${total} plat${total > 1 ? "s" : ""} prêt${total > 1 ? "s" : ""}`, total ? "ok" : "idle"], this.employeesAt("tavern", tavern.id).length ? ["Cuisinier au travail", "ok"] : ["Pas de cuisinier", "bad"]]);
+        for (const r of RECIPES) {
+          const n = tavern.dishes[r.id] ?? 0;
+          stat(`${r.emoji} ${r.label}`, `${n} / ${DISH_CAP}`, [n, DISH_CAP]);
+          const needs = (Object.entries(r.needs) as [keyof typeof EXPORT_GOODS, number][]).map(([g, q]) => `${q} ${EXPORT_GOODS[g].emoji}`).join(" + ");
+          box.appendChild(div("menuRow tiny", `${needs} · ⚡ +${r.energy} énergie · rassasie ${Math.round(r.sated / 60)} min`));
+        }
+        const pantry = (Object.entries(tavern.pantry) as [keyof typeof EXPORT_GOODS, number][]).filter(([, n]) => n > 0).map(([g, n]) => `${n} ${EXPORT_GOODS[g].emoji}`).join("  ");
+        stat("🧺 Garde-manger", pantry || "vide");
+      } else if (ship) {
+        const done = shipyardDone(ship);
+        head("⛵", "Chantier du grand drakkar", [done ? ["Drakkar terminé", "ok"] : [`Étape ${ship.stage + 1} / ${DRAKKAR_STAGES.length}`, "idle"], done ? ["Prêt à appareiller", "ok"] : [DRAKKAR_STAGES[ship.stage].label, "idle"]]);
+        if (!done) {
+          for (const [g, have, need] of shipyardNeeds(ship)) stat(`${EXPORT_GOODS[g].emoji} ${EXPORT_GOODS[g].label}`, `${have} / ${need}`, [have, need]);
+          const give = document.createElement("button");
+          give.className = "round menuItem";
+          give.textContent = "📦 Livrer depuis les dépôts";
+          give.addEventListener("click", () => {
+            const n = deliverToShipyard(this.save, ship);
+            toast(n > 0 ? `⛵ ${n} marchandise${n > 1 ? "s" : ""} livrée${n > 1 ? "s" : ""} au chantier.` : "Les dépôts n'ont rien de ce qui manque.");
+            persist(this.save);
+            this.menuSig = "";
+          });
+          box.appendChild(give);
+        } else {
+          const go = document.createElement("button");
+          go.className = "round menuItem on";
+          go.textContent = "⛵ Appareiller vers une île nouvelle";
+          go.addEventListener("click", () => {
+            if (!window.confirm("Tout le village embarque et quitte cette île pour fonder une colonie sur une île nouvelle.\nLes bâtiments restent ici : seuls les villageois et les pièces voyagent.\n\nAppareiller ?")) return;
+            this.setSail();
+          });
+          box.appendChild(go);
+        }
+      } else if (market) {
         const secs = Math.max(0, Math.ceil(market.clock));
         const eta = secs >= 60 ? `${Math.ceil(secs / 60)} min` : `${secs} s`;
         head("🛒", "Marché", [market.here ? ["Caravane présente", "ok"] : ["Pas de caravane", "idle"], market.here ? [`Repart dans ${eta}`, secs < 60 ? "bad" : "idle"] : [`Prochaine dans ~${eta}`, "idle"]]);
@@ -4143,6 +4522,9 @@ export class Game {
           stable: ["🐄", "étable"],
           pigpen: ["🐖", "porcherie"],
           market: ["🛒", "marché"],
+          shipyard: ["⛵", "chantier du drakkar"],
+          tavern: ["🍺", "taverne"],
+          pantry: ["🥫", "garde-manger"],
           depot: ["📦", "dépôt"],
         };
         const [emoji, name] = names[site.kind];
@@ -4161,13 +4543,13 @@ export class Game {
         const planks = depot.planks ?? 0;
         const cuts = (depot.cuts ?? 0) + (depot.honey ?? 0) + (depot.berries ?? 0) + (depot.milk ?? 0) + (depot.meat ?? 0) + cropTotal(depot); // places prises par la viande préparée, le miel et les baies
         const e = depotEntrance(depot);
-        head("📦", "Dépôt", [linkChip("usines", e, [...this.save.sawmills.map(sawmillEntrance), ...this.save.butchers.map(butcherEntrance)]), planks + cuts >= depotCapacity(depot) ? ["Plein", "bad"] : ["Place libre", "idle"], [`Niveau ${depotLevel(depot)}`, "idle"]]);
-        stat("Places", `${planks + cuts} / ${depotCapacity(depot)}`, [planks + cuts, depotCapacity(depot)]);
-        stat("🪚 Planches", String(planks));
+        head(depot.pantry ? "🥫" : "📦", depot.pantry ? "Garde-manger" : "Dépôt", [linkChip("usines", e, [...this.save.sawmills.map(sawmillEntrance), ...this.save.butchers.map(butcherEntrance)]), (depotCapacity(depot) - depotFree(depot)) >= depotCapacity(depot) ? ["Plein", "bad"] : ["Place libre", "idle"], [`Niveau ${depotLevel(depot)}`, "idle"]]);
+        stat("Places", `${(depotCapacity(depot) - depotFree(depot))} / ${depotCapacity(depot)}`, [(depotCapacity(depot) - depotFree(depot)), depotCapacity(depot)]);
+        if (!depot.pantry) stat("🪚 Planches", String(planks));
         stat("🥩 Viande préparée", String(depot.cuts ?? 0));
         stat("🍯 Miel", String(depot.honey ?? 0));
         stat("🫐 Baies", String(depot.berries ?? 0));
-        if ((depot.milk ?? 0) > 0) stat("🥛 Lait", String(depot.milk));
+        if ((depot.milk ?? 0) > 0 || depot.pantry) stat("🥛 Lait", String(depot.milk ?? 0));
         stat("🍖 Viande brute", String(depot.meat ?? 0));
         for (const id of Object.keys(FARM_CROPS) as FarmCrop[]) if ((depot.crops?.[id] ?? 0) > 0) stat(`${FARM_CROPS[id].emoji} ${FARM_CROPS[id].label}`, String(depot.crops?.[id]));
       }
@@ -4229,7 +4611,8 @@ export class Game {
         }
         box.appendChild(sec);
       };
-      if (pigpen) crewList("pigpen", pigpen.id);
+      if (tavern) crewList("tavern", tavern.id);
+      else if (pigpen) crewList("pigpen", pigpen.id);
       else if (stable) crewList("stable", stable.id);
       else if (farm) crewList("farm", farm.id);
       else if (church) crewList("church", church.id);
@@ -4245,7 +4628,7 @@ export class Game {
         crewList("depot", depot.id);
         crewList("gather", depot.id);
       }
-      this.addMenuActions(box, (market ?? pigpen ?? stable ?? farm ?? church ?? clinic ?? apiary ?? port ?? shop ?? lodge ?? well ?? mill ?? house ?? camp ?? site ?? depot)!);
+      this.addMenuActions(box, (tavern ?? ship ?? market ?? pigpen ?? stable ?? farm ?? church ?? clinic ?? apiary ?? port ?? shop ?? lodge ?? well ?? mill ?? house ?? camp ?? site ?? depot)!);
     }
     // ce que chacun fait se met à jour en place, sans refaire le menu
     box.querySelectorAll<HTMLElement>(".mAct").forEach((el) => {
@@ -4312,6 +4695,103 @@ export class Game {
       box.style.display = "none";
       box.classList.remove("out");
     }, 170);
+  }
+
+  // La fenêtre du port : un tableau par ressource (stock, ce qu'on exporte par bateau, le stock minimum à garder). Le jeu se met en pause pendant qu'elle est ouverte.
+  private openPort(port: Port) {
+    this.portOpen = port;
+    this.portBuiltFor = null;
+    this.paused = true;
+    this.renderPort();
+    (document.getElementById("portModal") as HTMLElement).hidden = false;
+  }
+
+  private closePort() {
+    if (!this.portOpen) return;
+    this.portOpen = null;
+    this.paused = false;
+    this.lastT = performance.now();
+    persist(this.save);
+    (document.getElementById("portModal") as HTMLElement).hidden = true;
+  }
+
+  // Le tableau est construit une fois ; ensuite on ne change que les chiffres (pas de reconstruction : aucun clignotement).
+  private portCells: { stock: HTMLElement; can: HTMLElement; dock: HTMLElement; quota: HTMLElement; reserve: HTMLElement; g: ExportGood }[] = [];
+  private portBuiltFor: Port | null = null;
+
+  private renderPort() {
+    const port = this.portOpen;
+    if (!port || !this.save.ports.includes(port)) return this.closePort();
+    const s = this.save;
+    const body = document.getElementById("portBody") as HTMLElement;
+    const sub = document.getElementById("portSub") as HTMLElement;
+    const f = port.t / SHIP_CYCLE;
+    const secs = (frac: number) => Math.max(0, Math.round(((((frac - f) % 1) + 1) % 1) * SHIP_CYCLE));
+    const state = f >= SHIP_ARRIVE - 0.02 && f < SHIP_DOCKED ? "⛵ Bateau en approche" : f >= SHIP_DOCKED && f < SHIP_DEPART ? "⛵ Chargement" : "🌊 Bateau au large";
+    const maxGain = EXPORT_LIST.reduce((a, g) => a + portQuota(port, g) * EXPORT_GOODS[g].price, 0);
+    const subText = `${state} · départ dans ${secs(SHIP_DEPART)} s · gain maximum ${maxGain} 🪙`;
+    if (sub.textContent !== subText) sub.textContent = subText;
+    const set = (el: HTMLElement, text: string) => {
+      if (el.textContent !== text) el.textContent = text;
+    };
+    if (this.portBuiltFor !== port) {
+      this.portBuiltFor = port;
+      this.portCells = [];
+      body.textContent = "";
+      const note = document.createElement("p");
+      note.className = "portNote";
+      const linked = this.linkedTo(portEntrance(port), s.depots.map(depotEntrance));
+      note.textContent = `Pour chaque ressource, règle combien part par bateau (0 : pas d'export) et le stock minimum à garder au village : seul ce qui dépasse ce minimum est exporté. Maj + clic : de 5 en 5.${linked ? "" : " ⚠ Aucun dépôt n'est relié au port par un chemin : les porteurs ne pourront rien apporter."}`;
+      body.appendChild(note);
+      const table = document.createElement("table");
+      const head = table.createTHead().insertRow();
+      for (const t of ["Ressource", "Prix", "En stock", "Exporter par bateau", "Stock minimum à garder", "Peut partir", "Au quai"]) {
+        const th = document.createElement("th");
+        th.textContent = t;
+        head.appendChild(th);
+      }
+      const tbody = table.createTBody();
+      const stepper = (td: HTMLElement, get: () => number, put: (v: number) => void) => {
+        const box = document.createElement("span");
+        box.className = "pStep";
+        const v = document.createElement("b");
+        const mk = (text: string, delta: number) => {
+          const b = document.createElement("button");
+          b.className = "round";
+          b.textContent = text;
+          b.addEventListener("click", (ev) => {
+            put(Math.max(0, Math.min(PORT_CAP, get() + delta * (ev.shiftKey ? 5 : 1))));
+            persist(this.save);
+            this.renderPort();
+          });
+          return b;
+        };
+        box.append(mk("−", -1), v, mk("+", 1));
+        td.appendChild(box);
+        return v;
+      };
+      for (const g of EXPORT_LIST) {
+        const def = EXPORT_GOODS[g];
+        const tr = tbody.insertRow();
+        tr.insertCell().textContent = `${def.emoji} ${def.label}`;
+        tr.insertCell().textContent = `${def.price} 🪙`;
+        const stock = tr.insertCell();
+        const quota = stepper(tr.insertCell(), () => portQuota(port, g), (v) => (port.quota[g] = v));
+        const reserve = stepper(tr.insertCell(), () => portReserve(port, g), (v) => ((port.reserve ??= {})[g] = v));
+        const can = tr.insertCell();
+        const dock = tr.insertCell();
+        this.portCells.push({ stock, can, dock, quota, reserve, g });
+      }
+      body.appendChild(table);
+    }
+    for (const c of this.portCells) {
+      const g = c.g;
+      set(c.stock, String(villageStock(s, g)));
+      set(c.quota, String(portQuota(port, g)));
+      set(c.reserve, String(portReserve(port, g)));
+      set(c.can, String(exportable(s, port, g)));
+      set(c.dock, portQuota(port, g) > 0 ? `${portStock(port, g)} / ${portQuota(port, g)}` : "—");
+    }
   }
 
   // Le tableau des villageois : le jeu se met en pause pendant qu'il est ouvert.
@@ -4419,10 +4899,10 @@ export class Game {
     if (!w || this.campSel || this.depotSel || this.siteSel || this.houseSel || this.sawmillSel || this.wellSel || this.lodgeSel || this.butcherSel || this.clinicSel || this.portSel || this.apiarySel || this.churchSel || this.farmSel) return;
     const job = w.data.job ?? w.data.resume?.job ?? null;
     const role = w.data.job ? w.role : w.data.resume?.role ?? w.role;
-    const jobs: Record<string, string> = { none: "Villageois", wood: "Bûcheron", haul: "Porteur", build: "Bâtisseur", water: "Corvée", hunt: "Chasseur", bee: "Apiculteur", gather: "Cueilleur", heal: "Soigneur", bury: "Fossoyeur", farm: "Fermier", tend: "Éleveur", swine: "Porcher" };
+    const jobs: Record<string, string> = { none: "Villageois", wood: "Bûcheron", haul: "Porteur", build: "Bâtisseur", water: "Corvée", hunt: "Chasseur", bee: "Apiculteur", gather: "Cueilleur", heal: "Soigneur", bury: "Fossoyeur", farm: "Fermier", tend: "Éleveur", swine: "Porcher", cook: "Cuisinier" };
     let metier = w.data.workplace ? JOBS[w.data.workplace.kind].label : jobs[role] ?? "Villageois"; // son métier est celui de son emploi
-    if (role === "water" && job?.type === "water") metier = job.food ? "Corvée de vivres" : "Corvée d'eau";
-    const emojis: Record<string, string> = { none: "🧑‍🌾", wood: "🪓", haul: "📦", build: "🔨", water: "💧", hunt: "🏹", bee: "🐝", craft: "🛠️", gather: "🫐", heal: "🩺", bury: "⛪", farm: "🌾", tend: "🥛", swine: "🐖" };
+    if (role === "water" && job?.type === "water") metier = job.dine !== undefined ? "Au repas" : job.food ? "Corvée de vivres" : "Corvée d'eau";
+    const emojis: Record<string, string> = { none: "🧑‍🌾", wood: "🪓", haul: "📦", build: "🔨", water: "💧", hunt: "🏹", bee: "🐝", craft: "🛠️", gather: "🫐", heal: "🩺", bury: "⛪", farm: "🌾", tend: "🥛", swine: "🐖", cook: "🍲" };
     const tired = Math.round(100 - w.energy);
     const state = w.data.visit ? (w.inside ? "Boit et mange" : "Rentre boire ou manger") : w.inside ? (w.resting ? "Se repose" : w.fem ? "Chez elle" : "Chez lui") : w.resting ? "Rentre se reposer" : w.moving ? "En route" : w.working ? "Au travail" : "Disponible";
     const sv = this.save;
@@ -4552,9 +5032,10 @@ export class Game {
         ...sv.clinics.map((m) => ({ kind: "clinic" as const, id: m.id, emoji: "🩺", name: "maison du soigneur" })),
         ...sv.churches.map((m) => ({ kind: "church" as const, id: m.id, emoji: "⛪", name: "église" })),
         ...sv.farms.map((m) => ({ kind: "farm" as const, id: m.id, emoji: "🌾", name: "ferme" })),
+        ...sv.taverns.map((m) => ({ kind: "tavern" as const, id: m.id, emoji: "🍲", name: "taverne" })),
         ...sv.pigpens.map((m) => ({ kind: "pigpen" as const, id: m.id, emoji: "🐖", name: "porcherie" })),
         ...sv.stables.map((m) => ({ kind: "stable" as const, id: m.id, emoji: "🐄", name: "étable" })),
-        ...sv.sites.filter((t) => !t.undo).map((m) => ({ kind: "site" as const, id: m.id, emoji: "🔨", name: "chantier" })),
+        { kind: "site" as const, id: 0, emoji: "🔨", name: "chantiers" },
         ...sv.depots.map((m) => ({ kind: "depot" as const, id: m.id, emoji: "📦", name: "dépôt" })),
         ...sv.depots.map((m) => ({ kind: "gather" as const, id: m.id, emoji: "🫐", name: "dépôt (cueillette)" })),
         ...sv.ports.map((m) => ({ kind: "port" as const, id: m.id, emoji: "⚓", name: "port" })),
@@ -4563,18 +5044,18 @@ export class Game {
       ];
       let any = false;
       // les porteurs (de dépôt ou de port) et les cueilleurs ne dépendent pas d'un bâtiment précis : un seul choix chacun, au premier poste libre
-      const pooled: Partial<Record<WorkplaceKind, string>> = { depot: "p", port: "p", gather: "g" };
+      const pooled: Partial<Record<WorkplaceKind, string>> = { depot: "p", port: "p", gather: "g", site: "b" };
       const shown = new Set<string>();
       for (const p of places) {
         const here = w.data.workplace?.kind === p.kind && w.data.workplace.id === p.id;
         if (here || this.employeesAt(p.kind, p.id).length >= JOBS[p.kind].slots) continue;
         const pool = pooled[p.kind];
         if (pool) {
-          const isMine = pool === "p" ? w.data.workplace?.kind === "depot" || w.data.workplace?.kind === "port" : w.data.workplace?.kind === "gather";
+          const isMine = pool === "p" ? w.data.workplace?.kind === "depot" || w.data.workplace?.kind === "port" : pool === "b" ? w.data.workplace?.kind === "site" : w.data.workplace?.kind === "gather";
           if (isMine || shown.has(pool)) continue;
           shown.add(pool);
           any = true;
-          pick(pool === "p" ? "📦 Porteur · transporte tout" : "🫐 Cueilleur · ramasse les baies", () => this.hire(w, p.kind, p.id));
+          pick(pool === "p" ? "📦 Porteur · transporte tout" : pool === "b" ? "🔨 Bâtisseur · construit les chantiers" : "🫐 Cueilleur · ramasse les baies", () => this.hire(w, p.kind, p.id));
           continue;
         }
         any = true;

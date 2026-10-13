@@ -150,6 +150,10 @@ const LABELS: Record<string, string> = {
   Église: "Temple d'Odin",
   Étable: "Étable",
   Porcherie: "Porcherie",
+  Taverne: "Salle de banquet",
+  "Garde-manger": "Cellier",
+  "garde-manger": "cellier",
+  taverne: "salle de banquet",
   Chemin: "Chemin",
   "Camp de bûcherons": "Camp de bûcherons",
   maison: "maison longue",
@@ -181,3 +185,38 @@ const VIKING_NAMES: Record<string, string> = {
 
 // Le prénom affiché (la sauvegarde garde le prénom d'origine : on peut revenir au thème classique sans rien perdre).
 export const vn = (name: string): string => (isViking() ? VIKING_NAMES[name] ?? name : name);
+
+// ---------- style des chemins (thème viking) : on peut les essayer depuis ☰ Menu ----------
+export const ROAD_STYLES = [
+  { id: "realiste", label: "Chemin de terre réaliste" },
+  { id: "terre", label: "Sentier de terre" },
+  { id: "pave", label: "Pavés de pierre" },
+  { id: "traces", label: "Traces de charrette" },
+  { id: "planches", label: "Passerelle de planches" },
+  { id: "poudre", label: "Piste de terre claire" },
+] as const;
+export type RoadStyle = (typeof ROAD_STYLES)[number]["id"];
+
+const ROAD_KEY = "ferme-roadstyle";
+function readRoadStyle(): RoadStyle {
+  const q = new URLSearchParams(location.search).get("roadstyle");
+  if (q && ROAD_STYLES.some((r) => r.id === q)) return q as RoadStyle;
+  try {
+    const v = localStorage.getItem(ROAD_KEY);
+    if (v && ROAD_STYLES.some((r) => r.id === v)) return v as RoadStyle;
+  } catch {
+    /* style par défaut */
+  }
+  return "realiste";
+}
+let roadStyle: RoadStyle = readRoadStyle();
+export const getRoadStyle = () => roadStyle;
+export function cycleRoadStyle(): RoadStyle {
+  roadStyle = ROAD_STYLES[(ROAD_STYLES.findIndex((r) => r.id === roadStyle) + 1) % ROAD_STYLES.length].id;
+  try {
+    localStorage.setItem(ROAD_KEY, roadStyle);
+  } catch {
+    /* tant pis */
+  }
+  return roadStyle;
+}

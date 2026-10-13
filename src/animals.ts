@@ -5,6 +5,8 @@ import { GRID } from "./config";
 import { C } from "./draw";
 import { Save, walkable } from "./state";
 import { T, terrainAt } from "./world";
+import { isViking } from "./theme";
+import { furShade } from "./painted";
 
 export type Species = "rabbit" | "deer" | "boar";
 
@@ -206,6 +208,7 @@ export class Animal {
     g.beginPath();
     g.ellipse(0, 0, r * 1.0, r * 0.72, 0, 0, Math.PI * 2);
     g.fill();
+    if (isViking()) furShade(g, 0, 0, r * 1.0, r * 0.72, this.id * 7 + 1, true, 1.1);
     g.fillStyle = "#f4efe6";
     g.beginPath();
     g.arc(-r * 0.98, 0, r * 0.28, 0, Math.PI * 2);
@@ -245,6 +248,7 @@ export class Animal {
     g.beginPath();
     g.ellipse(0, 0, r * 1.15, r * 0.62, 0, 0, Math.PI * 2);
     g.fill();
+    if (isViking()) furShade(g, 0, 0, r * 1.15, r * 0.62, this.id * 7 + 2, true, 1.1);
     g.fillStyle = "#c28f55";
     g.beginPath();
     g.ellipse(-r * 0.1, -r * 0.1, r * 0.8, r * 0.3, 0, 0, Math.PI * 2);
@@ -303,6 +307,7 @@ export class Animal {
     g.beginPath();
     g.ellipse(0, 0, r * 1.1, r * 0.78, 0, 0, Math.PI * 2);
     g.fill();
+    if (isViking()) furShade(g, 0, 0, r * 1.1, r * 0.78, this.id * 7 + 3, true, 1.3);
     g.strokeStyle = "#2e211a";
     g.lineWidth = 2;
     g.beginPath();

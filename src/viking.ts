@@ -89,7 +89,7 @@ function runeStone(g: CanvasRenderingContext2D, x: number, y: number, rune: stri
   g.textBaseline = "alphabetic";
 }
 
-export type DecoKind = "house" | "depot" | "camp" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market";
+export type DecoKind = "house" | "depot" | "camp" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market" | "tavern";
 
 // Décore un bâtiment de `size` cases dont le coin haut-gauche est (gx, gy).
 export function drawVikingDeco(g: CanvasRenderingContext2D, kind: DecoKind, gx: number, gy: number, size: number, t: number) {
@@ -129,7 +129,7 @@ export function drawVikingDeco(g: CanvasRenderingContext2D, kind: DecoKind, gx: 
   g.lineTo(px - 14, py + 4 + wave * 0.7);
   g.stroke();
   // tête de dragon aux pignons des grandes maisons
-  if (kind === "house" || kind === "depot" || kind === "stable" || kind === "pigpen" || kind === "church" || kind === "lodge") dragonHead(g, x + 4, y + 0.1 * C + 8, 1);
+  if (kind === "house" || kind === "depot" || kind === "stable" || kind === "pigpen" || kind === "tavern" || kind === "church" || kind === "lodge") dragonHead(g, x + 4, y + 0.1 * C + 8, 1);
   // pierres runiques à l'entrée des lieux sacrés et du port
   if (kind === "church") {
     runeStone(g, x - 12, y + w - 18, "ᛟ");

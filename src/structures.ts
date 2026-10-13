@@ -1,7 +1,7 @@
 import { PIGS_MAX, PIG_PRICE, PIG_MEAT, COW_PRICE, STABLE_COWS_MAX, CHURCH_GRAVES, COSTS, CUT_SEC, HONEY_CAP, PRICE_HONEY, HOUSE_CAPACITY, LODGE_CAP, LOGS_PER_PLANK, PRICE_CUTS, PRICE_PLANK, SHIP_CYCLE } from "./balance";
 
 // Catalogue des structures qu'on pose d'un seul coup avec 🔨 Construire.
-export type StructureKind = "camp" | "depot" | "road" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market";
+export type StructureKind = "camp" | "depot" | "road" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market" | "shipyard" | "tavern" | "pantry";
 
 export interface StructureDef {
   id: string;
@@ -123,6 +123,39 @@ export const STRUCTURE_LIST: StructureDef[] = [
     size: 5,
     buildSec: K.farm.sec,
     desc: `5 × 5 cases d'herbe libre : douze parcelles où des fermiers cultivent, au choix, du blé, du maïs, des tomates ou des carottes (une culture à la fois, à changer dans le menu). Il faut ARROSER : les fermiers vont chercher l'eau au puits, remplissent la cuve de la ferme et arrosent les parcelles ; sans eau, rien ne pousse. L'avancement de chaque parcelle est visible. Les récoltes sont rangées au dépôt : de la nourriture pour les maisons, que le port achète. Rien ne pousse en hiver (sauf un peu les carottes). Fondations (${K.farm.coins} pièces), puis ${K.farm.mat} planches à livrer.`,
+  },
+  {
+    id: "pantry",
+    label: "Garde-manger",
+    kind: "pantry",
+    cost: K.pantry.coins,
+    woodCost: K.pantry.mat,
+    material: "plank",
+    size: 3,
+    buildSec: K.pantry.sec,
+    desc: `3 × 3 cases d'herbe libre. Le garde-manger range toute la nourriture et les boissons du village : viande, baies, miel, lait, légumes et herbe. Dès qu'il y en a un, ce qui est stocké dans les dépôts y est transporté ; les dépôts gardent le bois et les planches. Fondations (${K.pantry.coins} pièces), puis ${K.pantry.mat} planches à livrer.`,
+  },
+  {
+    id: "tavern",
+    label: "Taverne",
+    kind: "tavern",
+    cost: K.tavern.coins,
+    woodCost: K.tavern.mat,
+    material: "plank",
+    size: 3,
+    buildSec: K.tavern.sec,
+    desc: `3 × 3 cases d'herbe libre. Un cuisinier y prépare des plats (soupe, pain au miel, ragoût, rôti…) avec les légumes de la ferme, la viande préparée, le miel, le lait et les baies des dépôts. Les villageois affamés ou fatigués viennent y manger : chaque plat rend de l'énergie et rassasie plus ou moins longtemps. Fondations (${K.tavern.coins} pièces), puis ${K.tavern.mat} planches à livrer.`,
+  },
+  {
+    id: "shipyard",
+    label: "Chantier du grand drakkar",
+    kind: "shipyard",
+    cost: K.shipyard.coins,
+    woodCost: K.shipyard.mat,
+    material: "plank",
+    size: 6,
+    buildSec: K.shipyard.sec,
+    desc: `6 × 6 cases au bord de la mer (comme le port). On y construit le grand drakkar en 4 étapes (livrer des marchandises prises dans les dépôts). Une fois fini, tout le village embarque et part fonder une colonie sur une île nouvelle. Fondations (${K.shipyard.coins} pièces), puis ${K.shipyard.mat} planches à livrer.`,
   },
   {
     id: "market",
