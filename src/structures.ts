@@ -1,7 +1,7 @@
-import { PIGS_MAX, PIG_PRICE, PIG_MEAT, COW_PRICE, STABLE_COWS_MAX, CHURCH_GRAVES, COSTS, CUT_SEC, HONEY_CAP, PRICE_HONEY, HOUSE_CAPACITY, LODGE_CAP, LOGS_PER_PLANK, PRICE_CUTS, PRICE_PLANK, SHIP_CYCLE } from "./balance";
+import { CHEESE_MILK, PIGS_MAX, PIG_PRICE, PIG_MEAT, COW_PRICE, STABLE_COWS_MAX, CHURCH_GRAVES, COSTS, CUT_SEC, HONEY_CAP, PRICE_HONEY, HOUSE_CAPACITY, LODGE_CAP, LOGS_PER_PLANK, PRICE_CUTS, PRICE_PLANK, SHIP_CYCLE } from "./balance";
 
 // Catalogue des structures qu'on pose d'un seul coup avec 🔨 Construire.
-export type StructureKind = "camp" | "depot" | "road" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market" | "shipyard" | "tavern" | "pantry";
+export type StructureKind = "camp" | "depot" | "road" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market" | "shipyard" | "tavern" | "pantry" | "fishport" | "dairy";
 
 export interface StructureDef {
   id: string;
@@ -123,6 +123,28 @@ export const STRUCTURE_LIST: StructureDef[] = [
     size: 5,
     buildSec: K.farm.sec,
     desc: `5 × 5 cases d'herbe libre : douze parcelles où des fermiers cultivent, au choix, du blé, du maïs, des tomates ou des carottes (une culture à la fois, à changer dans le menu). Il faut ARROSER : les fermiers vont chercher l'eau au puits, remplissent la cuve de la ferme et arrosent les parcelles ; sans eau, rien ne pousse. L'avancement de chaque parcelle est visible. Les récoltes sont rangées au dépôt : de la nourriture pour les maisons, que le port achète. Rien ne pousse en hiver (sauf un peu les carottes). Fondations (${K.farm.coins} pièces), puis ${K.farm.mat} planches à livrer.`,
+  },
+  {
+    id: "dairy",
+    label: "Fromagerie",
+    kind: "dairy",
+    cost: K.dairy.coins,
+    woodCost: K.dairy.mat,
+    material: "plank",
+    size: 3,
+    buildSec: K.dairy.sec,
+    desc: `3 × 3 cases d'herbe libre. Un fromager y apporte le lait du garde-manger, le met en cuve et fabrique du fromage (${CHEESE_MILK} laits pour un fromage), qu'il range au garde-manger. Le fromage nourrit les maisons, entre dans des recettes de la taverne et s'exporte bien. Fondations (${K.dairy.coins} pièces), puis ${K.dairy.mat} planches à livrer.`,
+  },
+  {
+    id: "fishport",
+    label: "Port de pêche",
+    kind: "fishport",
+    cost: K.fishport.coins,
+    woodCost: K.fishport.mat,
+    material: "plank",
+    size: 3,
+    buildSec: K.fishport.sec,
+    desc: `3 × 3 cases sur la côte (au moins deux cases d'eau contre un côté, comme le port). Des pêcheurs y embarquent dans une barque, restent en mer un moment et rapportent du poisson au garde-manger. Le poisson nourrit les maisons, sert aux recettes de la taverne et s'exporte. Fondations (${K.fishport.coins} pièces), puis ${K.fishport.mat} planches à livrer.`,
   },
   {
     id: "pantry",

@@ -10,7 +10,9 @@
     #game { position:fixed; inset:0; width:100%; height:100%; display:block; touch-action:none; cursor:pointer; }
     .hud { position:fixed; top:12px; left:12px; display:flex; flex-wrap:wrap; gap:8px; max-width:calc(100vw - 250px); pointer-events:none; }
     .pill { background:var(--paper); border:3px solid var(--ink); border-radius:999px; padding:6px 14px; font-weight:700; box-shadow:0 3px 0 rgba(0,0,0,.2); }
-    #goods { display:flex; gap:8px; }
+    /* les ressources : un panneau compact sur deux colonnes, sous les pièces et les villageois (plus de place en haut) */
+    #goods { position:fixed; top:58px; left:12px; display:grid; grid-template-columns:repeat(2, auto); gap:5px; justify-items:start; z-index:5; }
+    #goods .pill { padding:2px 10px; font-size:14px; border-width:2px; box-shadow:0 2px 0 rgba(0,0,0,.2); white-space:nowrap; }
     [hidden] { display:none !important; }
     button { font:inherit; color:var(--ink); }
     .round { transition:transform .12s ease, background .15s ease, box-shadow .12s ease, opacity .15s; background:var(--paper); border:3px solid var(--ink); border-radius:999px; padding:6px 12px; font-weight:700; cursor:pointer; box-shadow:0 3px 0 rgba(0,0,0,.2); }
@@ -25,6 +27,24 @@
     .modal .modalBox { background:var(--paper); border:3px solid var(--ink); border-radius:18px; box-shadow:0 8px 0 rgba(0,0,0,.25); max-width:1120px; width:100%; max-height:calc(100vh - 32px); display:flex; flex-direction:column; animation:pop .28s ease-out; }
     .modal .modalHead { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:2px dashed rgba(74,59,42,.35); font-weight:700; font-size:20px; }
     .modal .modalSub { font-size:14px; opacity:.65; font-weight:600; flex:1; }
+    #pantryModal .modalBox { width:min(700px, 96vw); }
+    .modal .pantryGrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(165px, 1fr)); gap:6px; padding:2px 4px 4px; }
+    .modal .pTile { display:flex; align-items:center; gap:8px; padding:6px 8px; border:1.5px solid rgba(70,45,20,.35); border-radius:8px; background:rgba(255,248,225,.45); }
+    .modal .pEmoji { font-size:22px; line-height:1; }
+    .modal .pTxt { display:flex; flex-direction:column; min-width:0; flex:1; line-height:1.15; }
+    .modal .pName { font-size:12.5px; font-weight:700; white-space:normal; }
+    .modal .pSub { font-size:11px; opacity:.75; white-space:nowrap; }
+    .modal .pQty { font-size:17px; font-variant-numeric:tabular-nums; min-width:22px; text-align:right; }
+    .modal .pantryTitle { margin:10px 4px 4px; font-size:16px; }
+    .modal .pantryUp { margin:12px 4px 4px; }
+    #portModal .modalBox { width:min(1020px, 97vw); }
+    .modal .portGrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(216px, 1fr)); gap:7px; padding:2px 4px 6px; }
+    .modal .pCard { border:1.5px solid rgba(70,45,20,.35); border-radius:9px; background:rgba(255,248,225,.45); padding:7px 9px; display:flex; flex-direction:column; gap:4px; }
+    .modal .pHead { display:flex; justify-content:space-between; font-weight:700; font-size:14px; }
+    .modal .pInfo { display:flex; flex-wrap:wrap; gap:2px 10px; font-size:11.5px; opacity:.85; }
+    .modal .pSteps { display:flex; justify-content:space-between; gap:6px; }
+    .modal .pGroup { display:flex; flex-direction:column; gap:2px; font-size:11px; }
+    .modal .pCard .pStep button { width:24px; height:24px; font-size:15px; }
     .modal .pStep { display:inline-flex; align-items:center; gap:5px; }
     .modal .pStep button { width:26px; height:26px; padding:0; font-size:16px; line-height:1; }
     .modal .pStep b { min-width:30px; text-align:center; font-variant-numeric:tabular-nums; }
@@ -38,6 +58,18 @@
     .modal tbody tr { cursor:pointer; transition:background .1s; }
     .modal tbody tr:hover { background:rgba(143,190,90,.25); }
     .modal tr.sick { background:rgba(214,80,60,.12); }
+    .modal .vacancyBar { margin:2px 2px 8px; padding:6px 8px 8px; border-radius:8px; background:rgba(242,177,52,.2); border:1.5px solid rgba(190,120,20,.5); }
+    .modal .vacancyBar.ok { background:rgba(80,160,90,.16); border-color:rgba(60,130,70,.45); }
+    .modal .vacancyTitle { font-weight:700; font-size:13.5px; }
+    .modal .vacancyGrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:5px; margin-top:6px; }
+    .modal .vacancyCard { display:flex; align-items:center; gap:7px; padding:4px 8px; border-radius:8px; background:rgba(255,248,225,.8); border:1.5px solid rgba(120,80,20,.35); }
+    .modal .vcEmoji { font-size:20px; line-height:1; }
+    .modal .vcTxt { display:flex; flex-direction:column; flex:1; min-width:0; line-height:1.15; }
+    .modal .vcTxt b { font-size:13px; }
+    .modal .vcTxt small { font-size:11px; opacity:.75; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .modal .vcDots { font-size:13px; letter-spacing:1px; color:#b8741a; }
+    .modal tr.jobless { background:rgba(242,177,52,.26); }
+    .modal tr.jobless td:first-child { box-shadow:inset 4px 0 0 #e09a1a; }
     .modal .dot { display:inline-block; width:11px; height:11px; border-radius:50%; margin-right:7px; border:2px solid var(--ink); vertical-align:-1px; }
     .modal .meter { display:inline-block; width:38px; height:9px; border:2px solid var(--ink); border-radius:999px; background:#fffdf4; overflow:hidden; vertical-align:middle; margin-right:6px; }
     .modal .meter i { display:block; height:100%; background:#8fbe5a; }
@@ -295,8 +327,8 @@
   <div class="hud">
     <div class="pill">🪙 <span id="coins">0</span></div>
     <div class="pill" id="popPill">👥 <span id="pop">1 / 0</span></div>
-    <span id="goods"></span>
   </div>
+  <div id="goods"></div>
   <button id="menuBtn" class="round" title="Menu (Échap)">☰ Menu</button>
   <button id="helpBtn" class="round" title="Guide du jeu (H)">❓ Aide</button>
   <div id="calendar">
@@ -310,6 +342,12 @@
   <div id="cellInfo"></div>
   <button id="buildBtn" class="round">🔨 Construire</button>
 
+  <div id="pantryModal" class="modal" hidden>
+    <div class="modalBox">
+      <div class="modalHead"><span>🥫 Cellier</span><span class="modalSub" id="pantrySub"></span><button id="pantryClose" class="round">✕ Fermer</button></div>
+      <div class="modalBody" id="pantryBody"></div>
+    </div>
+  </div>
   <div id="portModal" class="modal" hidden>
     <div class="modalBox">
       <div class="modalHead"><span>⚓ Port</span><span class="modalSub" id="portSub"></span><button id="portClose" class="round">✕ Fermer</button></div>

@@ -1441,6 +1441,184 @@ export function paintPort(g: G, seed: number) {
   dragonPost(g, 12, 38, -1);
 }
 
+// Fromagerie (3 × 3) : une laiterie de rondins vue en coupe — grande cuve de cuivre, presse, étagères de meules de fromage, bidons de lait et tonneaux. La vapeur est dessinée en direct.
+export function paintDairy(g: G, seed: number) {
+  dirtGround(g, 2, 2, 188, 188, 12, seed, 0.6);
+  ruts(g, 96, 192, 168);
+  room(g, 8, 10, 176, 154, seed, [70, 122], "timber", 12);
+  flagFloor(g, 14, 16, 164, 142, seed + 8, 8);
+  innerShade(g, 8, 10, 176, 154);
+  // les étagères de meules de fromage au fond
+  const wheel = (x: number, y: number, r = 9) => {
+    g.fillStyle = "rgba(20,12,4,0.3)";
+    g.beginPath();
+    g.ellipse(x + 1.5, y + 2, r, r * 0.9, 0, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#e0b54a";
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
+    g.strokeStyle = "#8a6a1e";
+    g.lineWidth = 1.2;
+    g.stroke();
+    g.strokeStyle = "rgba(255,240,170,0.5)";
+    g.beginPath();
+    g.arc(x - 1, y - 1, r * 0.55, 0.3, 2.4);
+    g.stroke();
+  };
+  for (const sx of [20, 100]) {
+    shadowed(g, sx, 20, 72, 22, "#5e3c20", "#2f1d0e", 2);
+    for (let i = 0; i < 6; i++) wheel(sx + 10 + i * 11.5, 31, 5.5);
+  }
+  for (let i = 0; i < 6; i++) wheel(28 + i * 24, 58, 9);
+  // la grande cuve de cuivre où caille le lait, et sa petite sœur
+  const vat = (x: number, y: number, r: number) => {
+    g.fillStyle = "rgba(20,12,4,0.35)";
+    g.beginPath();
+    g.arc(x + 3, y + 5, r, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#a8602a";
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
+    g.strokeStyle = "#5a3010";
+    g.lineWidth = 2;
+    g.stroke();
+    g.fillStyle = "#f2efe2";
+    g.beginPath();
+    g.arc(x, y, r * 0.78, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "rgba(180,150,90,0.25)";
+    g.beginPath();
+    g.arc(x - r * 0.2, y - r * 0.2, r * 0.4, 0, Math.PI * 2);
+    g.fill();
+  };
+  vat(64, 104, 24);
+  vat(112, 112, 15);
+  // la presse à fromage
+  shadowed(g, 142, 86, 30, 40, "#7a5230", "#3a2615", 3);
+  g.fillStyle = "#cfd3d8";
+  g.fillRect(150, 94, 14, 6);
+  wheel(157, 112, 7);
+  // bidons de lait, tonneaux
+  for (let i = 0; i < 3; i++) {
+    g.fillStyle = "rgba(20,12,4,0.3)";
+    g.beginPath();
+    g.arc(26 + i * 18 + 2, 142, 8, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#c4ccd4";
+    g.beginPath();
+    g.arc(26 + i * 18, 140, 8, 0, Math.PI * 2);
+    g.fill();
+    g.strokeStyle = "#5a6672";
+    g.lineWidth = 1.3;
+    g.stroke();
+    g.fillStyle = "#e8eef4";
+    g.beginPath();
+    g.arc(26 + i * 18, 140, 4.5, 0, Math.PI * 2);
+    g.fill();
+  }
+  barrel(g, 160, 140, 11);
+  crate(g, 120, 136, 20);
+  shieldRow(g, 22, 170, 15, seed, 5);
+  dragonPost(g, 6, 12, -1);
+  dragonPost(g, 186, 12, 1);
+  runeStone(g, 170, 178, "ᛗ", 0.9);
+}
+
+// Le port de pêche (3 × 3) : comme le port, avec en plus des séchoirs chargés de poisson, des caisses de poissons argentés, une table à vider le poisson et des tonneaux de sel.
+export function paintFishport(g: G, seed: number) {
+  paintPort(g, seed + 99);
+  const fish = (x: number, y: number, a = 0, col = "#b9c4cf") => {
+    g.save();
+    g.translate(x, y);
+    g.rotate(a);
+    g.fillStyle = col;
+    g.beginPath();
+    g.ellipse(0, 0, 8, 3.2, 0, 0, Math.PI * 2);
+    g.moveTo(-6, 0);
+    g.lineTo(-12, -4);
+    g.lineTo(-12, 4);
+    g.closePath();
+    g.fill();
+    g.strokeStyle = "#5a6672";
+    g.lineWidth = 0.9;
+    g.stroke();
+    g.fillStyle = "#1a2530";
+    g.fillRect(4, -1.4, 1.4, 1.4);
+    g.restore();
+  };
+  // des poissons sur les séchoirs
+  for (const py of [62, 92]) for (let i = 0; i < 5; i++) fish(139 + i * 9, py, Math.PI / 2, i % 2 ? "#a8b4bf" : "#c4ced8");
+  // une caisse pleine de poissons
+  shadowed(g, 20, 150, 34, 24, "#9a7240", "#3a2615", 2);
+  for (let i = 0; i < 4; i++) fish(30 + (i % 2) * 8, 156 + i * 4.5, 0.2 * i, "#b9c4cf");
+  // la table pour vider le poisson
+  table(g, 62, 150, 36, 18);
+  fish(80, 159, 0.2, "#c4ced8");
+  g.fillStyle = "#cfd3d8";
+  g.fillRect(70, 163, 14, 2);
+  // tonneaux de sel
+  barrel(g, 110, 160, 9);
+  barrel(g, 130, 162, 9);
+  // l'emblème : un grand poisson sur la passerelle
+  g.save();
+  g.globalAlpha = 0.55;
+  fish(96, 118, -Math.PI / 2, "#2f5f8a");
+  g.restore();
+}
+
+// Une petite barque de pêche vue de dessus, l'étrave vers le haut ; elle tangue doucement.
+export function drawBoat(g: G, x: number, y: number, t: number, seed = 0, moored = false) {
+  g.save();
+  g.translate(x, y + (moored ? 0 : Math.sin(t / 420 + seed) * 2));
+  g.rotate(moored ? 0.12 : Math.sin(t / 600 + seed) * 0.06);
+  g.fillStyle = "rgba(10,40,60,0.3)";
+  g.beginPath();
+  g.ellipse(4, 6, 13, 27, 0, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#7a4e2a";
+  g.beginPath();
+  g.moveTo(0, -27);
+  g.quadraticCurveTo(15, -4, 11, 22);
+  g.quadraticCurveTo(0, 28, -11, 22);
+  g.quadraticCurveTo(-15, -4, 0, -27);
+  g.closePath();
+  g.fill();
+  g.strokeStyle = "#2a1a10";
+  g.lineWidth = 2;
+  g.stroke();
+  g.fillStyle = "#a4753f"; // le fond de la barque
+  g.beginPath();
+  g.moveTo(0, -20);
+  g.quadraticCurveTo(9, -3, 6, 18);
+  g.quadraticCurveTo(0, 22, -6, 18);
+  g.quadraticCurveTo(-9, -3, 0, -20);
+  g.closePath();
+  g.fill();
+  g.strokeStyle = "#5a3d1c"; // bancs
+  g.lineWidth = 2;
+  for (const by of [-6, 8]) {
+    g.beginPath();
+    g.moveTo(-8, by);
+    g.lineTo(8, by);
+    g.stroke();
+  }
+  g.strokeStyle = "#8a6a46"; // rames
+  g.lineWidth = 2;
+  g.beginPath();
+  g.moveTo(-9, 0);
+  g.lineTo(-24, 5);
+  g.moveTo(9, 0);
+  g.lineTo(24, 5);
+  g.stroke();
+  g.fillStyle = "#b9a878"; // un filet roulé
+  g.beginPath();
+  g.ellipse(0, 14, 5, 3.5, 0, 0, Math.PI * 2);
+  g.fill();
+  g.restore();
+}
+
 // Le quai du port, dessiné en direct car il dépasse du bâtiment : des planches qui avancent dans l'eau (vers le haut), des pieux et une lanterne.
 // (x, y) : coin haut-gauche du bâtiment, dans le repère déjà tourné.
 export function drawPier(g: G, x: number, y: number) {

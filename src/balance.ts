@@ -9,7 +9,7 @@
 
 // ---------- départ ----------
 export const START_COINS = 1000; // pour les essais (160 suffisaient pour camp, scierie, maison et quelques chemins)
-export const MAX_CREW = 10; // villageois au maximum
+export const MAX_CREW = 30; // villageois au maximum
 export const ARRIVAL_SEC = 90; // tant qu'une maison a une place libre, un villageois arrive toutes les 90 s
 export const HOUSE_CAPACITY = 2; // villageois logés par maison
 
@@ -30,6 +30,8 @@ export const COSTS = {
   church: { coins: 70, mat: 16, sec: 16 }, // planches ; l'église et son cimetière
   farm: { coins: 90, mat: 20, sec: 18 }, // planches ; la ferme (5 × 5 cases, douze parcelles)
   stable: { coins: 70, mat: 16, sec: 14 }, // planches ; l'étable (4 × 4 cases) et son enclos
+  dairy: { coins: 45, mat: 12, sec: 12 }, // planches ; la fromagerie (3 × 3 cases)
+  fishport: { coins: 40, mat: 12, sec: 12 }, // planches ; le port de pêche (3 × 3 cases, sur la côte)
   pantry: { coins: 20, mat: 10, sec: 10 }, // planches ; le garde-manger (3 × 3 cases) : toute la nourriture y est rangée
   tavern: { coins: 70, mat: 16, sec: 14 }, // planches ; la taverne (3 × 3 cases)
   shipyard: { coins: 250, mat: 40, sec: 28 }, // planches ; le chantier du grand drakkar (6 × 6 cases, au bord de la mer)
@@ -120,6 +122,8 @@ export const EXPORT_GOODS = {
   carrot: { label: "Carottes", emoji: "🥕", price: 2 },
   grass: { label: "Herbe", emoji: "🌿", price: 1 },
   milk: { label: "Lait", emoji: "🥛", price: 3 },
+  fish: { label: "Poisson", emoji: "🐟", price: 3 },
+  cheese: { label: "Fromage", emoji: "🧀", price: 8 },
 } as const;
 export type ExportGood = keyof typeof EXPORT_GOODS;
 export const PRICE_PLANK = 2; // pièces par planche exportée
@@ -156,6 +160,8 @@ export const JOBS = {
   port: { slots: 2, label: "Porteur" },
   sawmill: { slots: 2, label: "Scieur" },
   butcher: { slots: 2, label: "Boucher" },
+  dairy: { slots: 2, label: "Fromager" }, // prend le lait au garde-manger, le transforme en fromage et le rapporte
+  fishport: { slots: 3, label: "Pêcheur" }, // part en barque pêcher et rapporte le poisson au garde-manger
   tavern: { slots: 2, label: "Cuisinier" }, // rapporte les ingrédients des dépôts et prépare les plats
   pigpen: { slots: 2, label: "Porcher" }, // nourrit et fait boire les cochons, les abat quand on le demande et rapporte la viande au dépôt
   stable: { slots: 2, label: "Éleveur" }, // nourrit et fait boire les vaches, trait le lait et le range au dépôt
@@ -170,13 +176,26 @@ export const LUMBER_RADIUS = 10; // un bûcheron employé coupe dans ce rayon (e
 // ---------- âge ----------
 // Chaque villageois vieillit avec le temps du jeu : AGE_YEARS_PER_DAY ans par jour (un jour = DAY_SEC secondes). Il meurt de vieillesse à son espérance de vie
 // (tirée au hasard entre LIFESPAN_MIN et LIFESPAN_MAX). Les anciens vont moins vite, se fatiguent plus et tombent plus souvent malades.
-export const AGE_YEARS_PER_DAY = 5; // (jours de 600 s : on vieillit au même rythme réel qu'avec 2 ans par jour de 240 s)
+export const AGE_YEARS_PER_DAY = 2; // un jour de 600 s fait vieillir de 2 ans : une vie dure environ 6 heures de jeu en temps réel
 export const AGE_START = [20, 38]; // âge des premiers villageois
 export const AGE_ARRIVAL = [18, 30]; // âge de ceux qui arrivent ensuite
 export const LIFESPAN_MIN = 70;
 export const LIFESPAN_MAX = 90;
 export const AGE_ELDER = 60; // à partir de là : « âgé »
 export const AGE_WARN = 5; // prévenu cinq ans avant la fin
+
+// ---------- le fromage ----------
+// La fromagerie (3 × 3 cases) transforme le lait des vaches en fromage : le fromager prend du lait au garde-manger, le met en cuve, et chaque fromage demande CHEESE_MILK laits.
+export const CHEESE_MILK = 3; // laits pour un fromage
+export const CHEESE_MAKE_SEC = 14; // temps de fabrication d'un fromage
+export const DAIRY_MILK_CAP = 18; // lait gardé en cuve
+export const DAIRY_CARRY = 6; // lait rapporté d'un coup
+
+// ---------- la pêche ----------
+// Le port de pêche (3 × 3 cases, sur la côte comme le port) emploie des pêcheurs : chacun embarque dans une barque, reste en mer un moment, puis rapporte du poisson au garde-manger.
+export const FISH_SEC = 70; // temps passé en mer pour une sortie
+export const FISH_CATCH: [number, number] = [3, 6]; // poissons rapportés par sortie
+export const FISH_SEASON = [1, 1.25, 1, 0.5]; // printemps, été, automne, hiver : la pêche est moins bonne en hiver
 
 // ---------- la taverne et ses recettes ----------
 // Le cuisinier prépare des plats avec les légumes de la ferme, la viande préparée, le miel, le lait et les baies des dépôts. Chaque plat redonne de l'énergie
@@ -196,9 +215,13 @@ export const RECIPES: Recipe[] = [
   { id: "bread", label: "Pain au miel", emoji: "🍞", needs: { wheat: 3, honey: 1 }, energy: 20, sated: 240, cookSec: 5 },
   { id: "galette", label: "Galette de maïs au lait", emoji: "🫓", needs: { corn: 2, milk: 1 }, energy: 25, sated: 300, cookSec: 6 },
   { id: "stew", label: "Ragoût de viande", emoji: "🍲", needs: { cuts: 2, carrot: 2, tomato: 1 }, energy: 35, sated: 420, cookSec: 7 },
+  { id: "cheesebread", label: "Pain au fromage", emoji: "🥖", needs: { wheat: 2, cheese: 1 }, energy: 28, sated: 330, cookSec: 5 },
+  { id: "gratin", label: "Gratin au fromage", emoji: "🧀", needs: { cheese: 2, carrot: 2, tomato: 1 }, energy: 42, sated: 480, cookSec: 8 },
+  { id: "fishsoup", label: "Soupe de poisson", emoji: "🍜", needs: { fish: 2, carrot: 1, tomato: 1 }, energy: 38, sated: 450, cookSec: 7 },
+  { id: "grilled", label: "Poisson grillé", emoji: "🐟", needs: { fish: 2, wheat: 1 }, energy: 30, sated: 360, cookSec: 6 },
   { id: "roast", label: "Rôti du viking", emoji: "🍖", needs: { cuts: 3, corn: 1, honey: 1 }, energy: 55, sated: 600, cookSec: 9 },
 ];
-export const DISH_CAP = 8; // plats de chaque recette que la taverne garde
+export const DISH_CAP = 30; // plats de chaque recette que la taverne (et le cellier) gardent
 export const PANTRY_CAP = 16; // ingrédients de chaque sorte gardés au garde-manger de la taverne
 export const COOK_CARRY = 8; // ce que le cuisinier rapporte d'un coup
 export const DINE_HUNGER = 45; // % de faim à partir duquel un villageois passe manger à la taverne

@@ -3,7 +3,7 @@
 import {
   ARRIVAL_SEC, CAMP_CAPACITY, COSTS, COW_PRICE, CUT_SEC, DAY_SEC, DEPOT_CAPACITY, DEPOT_LEVELS, EXPORT_GOODS, FARM_CROPS, FARM_TANK_CAP, HONEY_CAP, HOUSE_CAPACITY,
   HUNT_RADIUS, JOBS, LODGE_CAP, LOGS_PER_PLANK, LUMBER_RADIUS, MAX_CREW, PLANK_SEC, SEASON_DAYS, SHIP_CYCLE, STABLE_COWS_MAX, WELL_CAP, WET_SEC, CHURCH_GRAVES, SAWMILL_LOGS_CAP,
-  BUTCHER_CUTS_CAP, ILLNESSES, ExportGood, PIGS_MAX, PIG_PRICE, PIG_MEAT, PIG_KEEP, RECIPES, DISH_CAP, DINE_HUNGER, DRAKKAR_STAGES, COLONY_GOAL, MARKET_BUY_MULT, MARKET_SELL_MULT, MARKET_STAY_SEC,
+  BUTCHER_CUTS_CAP, ILLNESSES, ExportGood, PIGS_MAX, PIG_PRICE, PIG_MEAT, PIG_KEEP, CHEESE_MILK, CHEESE_MAKE_SEC, FISH_SEC, FISH_CATCH, RECIPES, DISH_CAP, DINE_HUNGER, DRAKKAR_STAGES, COLONY_GOAL, MARKET_BUY_MULT, MARKET_SELL_MULT, MARKET_STAY_SEC,
 } from "./balance";
 import { STRUCTURES } from "./structures";
 
@@ -140,7 +140,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     structure: "hunter-camp",
     paras: [
       cost("hunter-camp"),
-      `Les ${job("lodge")} traquent les animaux sauvages (lapins, cerfs, sangliers) dans un rayon de **${HUNT_RADIUS} cases**, tirent à l'arc et rapportent la **viande brute** au camp (**${LODGE_CAP} portions** au maximum).`,
+      `Les ${job("lodge")} traquent les animaux sauvages (lapins, cerfs, sangliers) **partout sur la carte** (ils vont chercher le gibier le plus proche d'eux, même loin du camp), tirent à l'arc et rapportent la **viande brute** au camp (**${LODGE_CAP} portions** au maximum).`,
       "• Place-le **près des prés et des forêts** où vivent les animaux (la faune se renouvelle avec le temps, moins en hiver).",
       "• La viande brute va ensuite à la **boucherie** : par un porteur, ou le boucher la prend lui-même au camp ou au dépôt.",
       "• Un camp presque plein (70 %) verse sa viande dans un **dépôt** relié par un chemin.",
@@ -191,6 +191,33 @@ export const HELP_TOPICS: HelpTopic[] = [
       `• ${job("stable")} : l'**éleveur** apporte l'herbe à l'auge, l'eau à l'abreuvoir, **trait** les vaches et range le **lait** au dépôt.`,
       "• Le lait est de la **nourriture** et s'exporte.",
       "• Prévois donc : **une ferme avec de l'herbe**, **un dépôt**, **un puits**, le tout relié.",
+    ],
+  },
+  {
+    id: "dairy",
+    group: "Bâtiments",
+    emoji: "🧀",
+    title: "Fromagerie",
+    structure: "dairy",
+    paras: [
+      cost("dairy"),
+      `• ${job("dairy")} : le **fromager** prend du **lait** au garde-manger (celui des vaches de l'étable), le verse dans sa cuve et fabrique du **fromage** (**${CHEESE_MILK} laits** pour un fromage, ${CHEESE_MAKE_SEC} s). Il range ensuite le fromage au **garde-manger**.`,
+      "• Le **fromage** est de la **nourriture** (il nourrit les maisons), entre dans des recettes de la **taverne** (pain au fromage, gratin au fromage) et **s'exporte** bien (8 🪙).",
+      "• Il te faut donc : une **étable** avec des vaches, un **garde-manger** (ou un dépôt) et la fromagerie, reliés par des **chemins**.",
+    ],
+  },
+  {
+    id: "fishport",
+    group: "Bâtiments",
+    emoji: "🎣",
+    title: "Port de pêche",
+    structure: "fishport",
+    paras: [
+      cost("fishport"),
+      "Comme le port, il se pose **sur la côte** (au moins deux cases d'eau contre un côté) ; la barque se tourne tout seule vers l'eau.",
+      `• ${job("fishport")} : chaque **pêcheur** embarque, reste en **mer ${FISH_SEC} s** (on voit sa barque au large), puis rapporte **${FISH_CATCH[0]} à ${FISH_CATCH[1]} poissons** au **garde-manger** (ou à un dépôt). Il pêche mieux en été et moins bien en hiver.`,
+      "• Le **poisson** est de la **nourriture** pour les maisons, sert aux recettes de la **taverne** (soupe de poisson, poisson grillé) et **s'exporte** au port.",
+      "• Relie le port de pêche par un **chemin** à un **garde-manger** ou à un dépôt.",
     ],
   },
   {

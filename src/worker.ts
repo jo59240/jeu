@@ -13,7 +13,7 @@ import { C } from "./draw";
 import { CARRY_MAX, CREW_COLORS, FEMALE_NAMES, FOOD_MAX, HAUL_MAX, HUNT_CARRY, HaulDest, WATER_MAX, WorkerSave, haulDest } from "./state";
 import { objects, T, terrainAt } from "./world";
 import { Zone } from "./zone";
-import { RECIPES, HARVEST_MAX, HARVEST_MIN, HARVEST_SEC, TEND_BELOW, TEND_SEC } from "./balance";
+import { CHEESE_MAKE_SEC, FISH_SEC, RECIPES, HARVEST_MAX, HARVEST_MIN, HARVEST_SEC, TEND_BELOW, TEND_SEC } from "./balance";
 import { NIGHT_DRAIN, NIGHT_IDLE_HOME, NIGHT_REST, SPEED, CHOP_SECONDS, LOAD_SECONDS, HUNT_RANGE, AIM_SECONDS, IDLE_HOME_SEC, DRAIN, REST_RATE, IDLE_RATE, TIRED, EXHAUSTED, WAKE_AT, NEED_GO, NEED_BAD, BERRY_CARRY, BERRY_PICK_SEC, BREW_SEC, ExportGood, ILLNESSES, SICK_BED, SICK_SLOW, AGE_ELDER, FARM_CROPS, FarmCrop, SOW_SEC, REAP_SEC } from "./balance";
 
 
@@ -68,6 +68,18 @@ export type CookPlan =
   | { type: "cook"; target: Cell; recipe: string } // préparer un plat (il entre en cuisine)
   | { type: "store"; target: Cell; depotId: number }; // porter le plat préparé au garde-manger
 
+// Une étape du travail du pêcheur.
+export type FishPlan =
+  | { type: "sail"; target: Cell } // embarquer à l'entrée du port de pêche et partir en mer
+  | { type: "deliver"; target: Cell; depotId: number }; // ranger le poisson au garde-manger (ou à un dépôt)
+
+// Une étape du travail du fromager.
+export type CheesePlan =
+  | { type: "fetch"; target: Cell; depotId: number } // prendre du lait au garde-manger
+  | { type: "stock"; target: Cell } // le verser dans la cuve de la fromagerie
+  | { type: "make"; target: Cell } // fabriquer un fromage (il travaille à l'intérieur)
+  | { type: "deliver"; target: Cell; depotId: number }; // ranger le fromage au garde-manger
+
 // Un villageois qui va manger à la taverne.
 export type DinePlan = { type: "eat"; target: Cell; depotId?: number }; // depotId : il mange au garde-manger (sinon à la taverne)
 
@@ -116,6 +128,16 @@ export interface WorkerEnv {
   dinePlan(tavernId: number, from: Cell, w: Worker): DinePlan | null;
   dineDo(plan: DinePlan, w: Worker): void;
 
+  // fromager : rapporter le lait, fabriquer et ranger le fromage
+  dairyInfo(dairyId: number): boolean;
+  dairyPlan(dairyId: number, from: Cell, w: Worker): CheesePlan | null;
+  dairyDo(plan: CheesePlan, w: Worker): void;
+
+  // pêcheur : partir en mer, rapporter le poisson
+  fishInfo(portId: number): boolean;
+  fishPlan(portId: number, from: Cell, w: Worker): FishPlan | null;
+  fishDo(plan: FishPlan, w: Worker): void;
+
   // porcher : nourrir et abreuver les cochons, les abattre, ranger la viande
   pigInfo(pigpenId: number): boolean; // false : la porcherie n'existe plus
   pigPlan(pigpenId: number, from: Cell, w: Worker): SwinePlan | null;
@@ -151,7 +173,7 @@ export interface WorkerEnv {
 
   // chasseur : un camp à servir et du gibier à trouver
   lodgeInfo(id: number): { free: number; entrance: Cell } | null; // null : le camp n'existe plus
-  preyNear(lodgeId: number, from: Cell): { id: number; x: number; y: number } | null; // le gibier libre le plus proche (il est alors réservé)
+  preyNear(lodgeId: number, from: Cell, skip?: Set<number>): { id: number; x: number; y: number } | null; // le gibier libre le plus proche du chasseur, n'importe où sur la carte (il est alors réservé)
   preyPos(id: number): { x: number; y: number } | null; // null : il n'est plus là
   releasePrey(id: number): void;
   kill(id: number): number; // renvoie les portions de viande (0 s'il avait déjà disparu)
@@ -236,9 +258,10 @@ export class Worker {
   private resumeGoal: Cell | null = null; // destination à rejoindre après s'être écarté pour laisser passer
   private warned = false; // il a déjà prévenu pour ce blocage
   private idleT = 0; // depuis combien de temps il ne fait rien
+  private noPrey = new Set<number>(); // gibier que le chasseur n'a pas pu atteindre
   private healCheckT = 0; // le soigneur en route chercher des ingrédients regarde de temps en temps si un malade l'attend
   private cookSec = 5; // durée de la préparation en cours
-  private stallTask: StablePlan | SwinePlan | CookPlan | DinePlan | null = null; // éleveur : l'étape en cours
+  private stallTask: StablePlan | SwinePlan | CookPlan | DinePlan | FishPlan | CheesePlan | null = null; // éleveur : l'étape en cours
   private farmTask: FarmPlan | null = null; // fermier : l'étape en cours
   private buryTask: BuryPlan | null = null; // fossoyeur : l'étape en cours
   private healTask: HealPlan | null = null; // soigneur : l'étape en cours
@@ -393,7 +416,7 @@ export class Worker {
   }
 
   // Change de métier : la tenue change, et le travail en cours s'arrête.
-  setRole(role: "none" | "wood" | "haul" | "build" | "water" | "hunt" | "bee" | "craft" | "gather" | "heal" | "bury" | "farm" | "tend" | "swine" | "cook", env: WorkerEnv) {
+  setRole(role: "none" | "wood" | "haul" | "build" | "water" | "hunt" | "bee" | "craft" | "gather" | "heal" | "bury" | "farm" | "tend" | "swine" | "cook" | "fish" | "cheese", env: WorkerEnv) {
     this.leave(env);
     this.data.resume = undefined;
     this.data.resting = false;
@@ -510,6 +533,46 @@ export class Worker {
     this.state = "idle";
     this.path = [];
     env.changed();
+  }
+
+  // Devient fromager de cette fromagerie : il apporte le lait, fabrique le fromage et le range.
+  startCheese(dairyId: number, env: WorkerEnv) {
+    this.leave(env);
+    this.data.resume = undefined;
+    this.data.resting = false;
+    this.releaseTree(env);
+    this.data.role = "cheese";
+    this.resetWait();
+    this.data.job = { type: "cheese", dairyId, made: 0 };
+    this.stallTask = null;
+    this.state = "idle";
+    this.path = [];
+    env.changed();
+  }
+
+  // Le fromager travaille à l'intérieur : on ne le voit plus.
+  get cheesing() {
+    return this.state === "stalling" && this.data.job?.type === "cheese" && this.stallTask?.type === "make";
+  }
+
+  // Devient pêcheur de ce port de pêche : il embarque, pêche en mer, puis rapporte le poisson.
+  startFish(portId: number, env: WorkerEnv) {
+    this.leave(env);
+    this.data.resume = undefined;
+    this.data.resting = false;
+    this.releaseTree(env);
+    this.data.role = "fish";
+    this.resetWait();
+    this.data.job = { type: "fish", portId, caught: 0 };
+    this.stallTask = null;
+    this.state = "idle";
+    this.path = [];
+    env.changed();
+  }
+
+  // Le pêcheur est parti en barque : on ne le voit plus (c'est la barque qu'on voit en mer).
+  get fishing() {
+    return this.state === "stalling" && this.data.job?.type === "fish" && this.stallTask?.type === "sail";
   }
 
   // Le cuisinier est entré en cuisine : on ne le voit plus.
@@ -821,13 +884,15 @@ export class Worker {
     if (this.state === "stalling") {
       this.timer += dt;
       const plan = this.stallTask;
-      if (this.timer < (plan?.type === "milk" ? 2.6 : plan?.type === "slaughter" ? 3 : plan?.type === "eat" ? 3.5 : plan?.type === "cook" ? this.cookSec : 1.8)) return;
+      if (this.timer < (plan?.type === "sail" ? FISH_SEC : plan?.type === "make" ? CHEESE_MAKE_SEC : plan?.type === "milk" ? 2.6 : plan?.type === "slaughter" ? 3 : plan?.type === "eat" ? 3.5 : plan?.type === "cook" ? this.cookSec : 1.8)) return;
       this.state = "idle";
       this.stallTask = null;
       const sj = this.data.job;
       if (plan) {
         if (sj?.type === "swine") env.pigDo(plan as SwinePlan, this);
         else if (sj?.type === "cook") env.tavernDo(plan as CookPlan, this);
+        else if (sj?.type === "cheese") env.dairyDo(plan as CheesePlan, this);
+        else if (sj?.type === "fish") env.fishDo(plan as FishPlan, this);
         else if (sj?.type === "water" && sj.dine !== undefined) env.dineDo(plan as DinePlan, this);
         else env.stableDo(plan as StablePlan, this);
       }
@@ -972,6 +1037,8 @@ export class Worker {
     else if (job.type === "tend") this.tendStep(env);
     else if (job.type === "swine") this.swineStep(env);
     else if (job.type === "cook") this.cookStep(env);
+    else if (job.type === "fish") this.fishStep(env);
+    else if (job.type === "cheese") this.cheeseStep(env);
     else this.waterStep(env);
   }
 
@@ -1054,6 +1121,8 @@ export class Worker {
     }
     if (job.type === "water" && job.dine !== undefined) return env.dinePlan(job.dine, this.cell, this) !== null;
     if (job.type === "water") return env.waterTarget(job.houseId, this.data.carry === 0, job.food).ok;
+    if (job.type === "cheese") return env.dairyInfo(job.dairyId) ? env.dairyPlan(job.dairyId, this.cell, this) !== null : true;
+    if (job.type === "fish") return env.fishInfo(job.portId) ? env.fishPlan(job.portId, this.cell, this) !== null : true;
     if (job.type === "cook") return env.tavernInfo(job.tavernId) ? env.tavernPlan(job.tavernId, this.cell, this) !== null : true;
     if (job.type === "swine") return env.pigInfo(job.pigpenId) ? env.pigPlan(job.pigpenId, this.cell, this) !== null : true;
     if (job.type === "tend") return env.stableInfo(job.stableId) ? env.stablePlan(job.stableId, this.cell, this) !== null : true;
@@ -1071,7 +1140,7 @@ export class Worker {
       const lodge = env.lodgeInfo(job.lodgeId);
       if (!lodge) return true;
       if (this.data.carry > 0) return lodge.free > 0;
-      const prey = env.preyNear(job.lodgeId, this.cell);
+      const prey = env.preyNear(job.lodgeId, this.cell, this.noPrey);
       if (prey) env.releasePrey(prey.id);
       return !!prey;
     }
@@ -1098,9 +1167,13 @@ export class Worker {
     const job = d.job;
     if (!job) return this.moving ? "En route" : "Disponible";
     if (this.waiting && !this.moving) return "Rien à faire pour le moment";
-    const what = d.cargo === "plank" ? "🪚" : d.cargo === "water" ? "💧" : d.cargo === "meat" ? "🍖" : d.cargo === "cuts" ? "🥩" : d.cargo === "honey" ? "🍯" : d.cargo === "berries" ? "🫐" : d.cargo === "tisane" ? "🍵" : d.cargo === "syrup" ? "🧪" : d.cargo === "body" ? "⚰️" : d.cargo === "milk" ? "🥛" : d.cargo === "meal" ? "🍲" : d.cargo && d.cargo in FARM_CROPS ? FARM_CROPS[d.cargo as FarmCrop].emoji : "🪵";
+    const what = d.cargo === "plank" ? "🪚" : d.cargo === "water" ? "💧" : d.cargo === "meat" ? "🍖" : d.cargo === "cuts" ? "🥩" : d.cargo === "honey" ? "🍯" : d.cargo === "berries" ? "🫐" : d.cargo === "tisane" ? "🍵" : d.cargo === "syrup" ? "🧪" : d.cargo === "body" ? "⚰️" : d.cargo === "milk" ? "🥛" : d.cargo === "meal" ? "🍲" : d.cargo === "fish" ? "🐟" : d.cargo === "cheese" ? "🧀" : d.cargo && d.cargo in FARM_CROPS ? FARM_CROPS[d.cargo as FarmCrop].emoji : "🪵";
     const load = d.carry > 0 ? ` · ${d.carry} ${what}` : "";
     switch (job.type) {
+      case "cheese":
+        return this.state === "stalling" ? (this.stallTask?.type === "make" ? "Fabrique du fromage" : this.stallTask?.type === "fetch" ? "Prend du lait" : this.stallTask?.type === "deliver" ? "Range le fromage" : "Verse le lait en cuve") : d.carry > 0 ? (d.cargo === "cheese" ? "Porte le fromage" : "Rapporte du lait") : this.moving ? "En tournée" : "Surveille la cuve";
+      case "fish":
+        return this.state === "stalling" ? (this.stallTask?.type === "sail" ? "En mer, il pêche" : "Range le poisson") : d.carry > 0 ? `Rapporte le poisson${load}` : this.moving ? "Va à sa barque" : "Prépare sa barque";
       case "cook":
         return this.state === "stalling" ? (this.stallTask?.type === "cook" ? "Prépare un plat" : this.stallTask?.type === "fetch" ? "Prend des ingrédients" : this.stallTask?.type === "store" ? "Range le plat au cellier" : "Range les ingrédients") : d.carry > 0 ? (d.cargo === "meal" ? "Porte le plat au cellier" : "Rapporte des ingrédients") : this.moving ? "Va chercher des ingrédients" : "Veille sur les fourneaux";
       case "swine":
@@ -1132,7 +1205,7 @@ export class Worker {
   }
 
   // Les bâtiments auxquels il est lié en ce moment (le menu d'un bâtiment liste ceux qui y travaillent).
-  involvedIn(): { kind: "camp" | "depot" | "sawmill" | "lodge" | "butcher" | "port" | "apiary" | "site" | "well" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "tavern"; id: number }[] {
+  involvedIn(): { kind: "camp" | "depot" | "sawmill" | "lodge" | "butcher" | "port" | "apiary" | "site" | "well" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "tavern" | "fishport" | "dairy"; id: number }[] {
     const job = this.data.job;
     if (!job) return [];
     if (job.type === "hunt") return [{ kind: "lodge", id: job.lodgeId }];
@@ -1144,6 +1217,8 @@ export class Worker {
     if (job.type === "tend") return [{ kind: "stable", id: job.stableId }];
     if (job.type === "swine") return [{ kind: "pigpen", id: job.pigpenId }];
     if (job.type === "cook") return [{ kind: "tavern", id: job.tavernId }];
+    if (job.type === "fish") return [{ kind: "fishport", id: job.portId }];
+    if (job.type === "cheese") return [{ kind: "dairy", id: job.dairyId }];
     if (job.type === "water" && job.dine !== undefined) return [{ kind: "tavern", id: job.dine }];
     if (job.type === "build") return [{ kind: "site", id: job.siteId }];
     if (job.type === "water") {
@@ -1722,6 +1797,86 @@ export class Worker {
     env.changed();
   }
 
+  // ---------- fromager ----------
+
+  // Boucle du fromager : le jeu choisit l'étape (rapporter du lait, le verser, fabriquer, ranger le fromage).
+  private cheeseStep(env: WorkerEnv) {
+    const job = this.data.job;
+    if (!job || job.type !== "cheese") return;
+    const here = this.cell;
+    const wait = (secs: number) => {
+      this.waiting = true;
+      this.waitT = secs;
+      this.state = "idle";
+    };
+    if (!env.dairyInfo(job.dairyId)) {
+      this.data.job = null; // la fromagerie a disparu
+      this.data.role = "none";
+      this.state = "idle";
+      env.notify(`${this.name} n'a plus de fromagerie.`);
+      env.changed();
+      return;
+    }
+    const plan = env.dairyPlan(job.dairyId, here, this);
+    if (!plan) {
+      wait(4);
+      return;
+    }
+    const path = here.gx === plan.target.gx && here.gy === plan.target.gy ? [] : env.findPath(here, plan.target, this);
+    if (!path) {
+      wait(3);
+      return;
+    }
+    this.waiting = false;
+    this.stallTask = plan;
+    this.state = "toStall";
+    if (path.length) this.path = path;
+    else {
+      this.state = "stalling";
+      this.timer = 0;
+    }
+  }
+
+  // ---------- pêcheur ----------
+
+  // Boucle du pêcheur : le jeu choisit l'étape (rapporter le poisson, ou embarquer pour une sortie en mer).
+  private fishStep(env: WorkerEnv) {
+    const job = this.data.job;
+    if (!job || job.type !== "fish") return;
+    const here = this.cell;
+    const wait = (secs: number) => {
+      this.waiting = true;
+      this.waitT = secs;
+      this.state = "idle";
+    };
+    if (!env.fishInfo(job.portId)) {
+      this.data.job = null; // le port de pêche a disparu
+      this.data.role = "none";
+      this.state = "idle";
+      env.notify(`${this.name} n'a plus de port de pêche.`);
+      env.changed();
+      return;
+    }
+    const plan = env.fishPlan(job.portId, here, this);
+    if (!plan) {
+      wait(4);
+      return;
+    }
+    const path = here.gx === plan.target.gx && here.gy === plan.target.gy ? [] : env.findPath(here, plan.target, this);
+    if (!path) {
+      wait(3);
+      return;
+    }
+    this.waiting = false;
+    this.stallTask = plan;
+    this.state = "toStall";
+    if (path.length) this.path = path;
+    else {
+      this.state = "stalling";
+      this.timer = 0;
+    }
+  }
+
   // ---------- porcher ----------
 
   // Boucle du porcher : le jeu choisit l'étape (ranger la viande, abattre, remplir l'auge ou l'abreuvoir).
@@ -2003,7 +2158,7 @@ export class Worker {
       deliver();
       return;
     }
-    const prey = env.preyNear(job.lodgeId, here);
+    const prey = env.preyNear(job.lodgeId, here, this.noPrey);
     if (!prey) {
       if (this.data.carry > 0) deliver();
       else wait(4); // pas de gibier dans les environs : il attend qu'il en revienne
@@ -2012,7 +2167,9 @@ export class Worker {
     const path = env.findPath(here, { gx: Math.floor(prey.x), gy: Math.floor(prey.y) }, this);
     if (!path) {
       env.releasePrey(prey.id);
-      wait(2);
+      if (this.noPrey.size > 40) this.noPrey.clear();
+      this.noPrey.add(prey.id); // inaccessible (île, enclos…) : il en cherche un autre
+      wait(1);
       return;
     }
     this.preyId = prey.id;
@@ -2085,7 +2242,7 @@ export class Worker {
     const target = env.waterTarget(job.houseId, this.data.carry === 0, job.food);
     if (!target.ok) {
       if (target.reason === "full" || target.reason === "noHouse") {
-        done(target.reason === "full" && job.hauled > 0 ? `${this.name} a rempli sa maison d'eau.` : "");
+        done(""); // la maison est pleine : plus de notification
         return;
       }
       if (this.data.carry > 0 && target.reason === "noWell") {
@@ -2736,6 +2893,38 @@ export class Worker {
           g.fillStyle = "#f2ead8";
           g.beginPath();
           g.arc(-r * 0.62, ly, r * 0.08, 0, Math.PI * 2);
+          g.fill();
+          continue;
+        }
+        if (this.data.cargo === "cheese") {
+          // une meule de fromage
+          g.fillStyle = "#b8862a";
+          g.beginPath();
+          g.arc(-r * 1.0, ly, r * 0.24, 0, Math.PI * 2);
+          g.fill();
+          g.fillStyle = "#f0c95a";
+          g.beginPath();
+          g.arc(-r * 1.0, ly, r * 0.19, 0, Math.PI * 2);
+          g.fill();
+          g.fillStyle = "#c99a30";
+          g.beginPath();
+          g.arc(-r * 0.95, ly - r * 0.05, r * 0.045, 0, Math.PI * 2);
+          g.arc(-r * 1.06, ly + r * 0.06, r * 0.04, 0, Math.PI * 2);
+          g.fill();
+          continue;
+        }
+        if (this.data.cargo === "fish") {
+          // un panier de poissons argentés
+          g.fillStyle = "#8a5a2e";
+          g.beginPath();
+          g.arc(-r * 1.0, ly, r * 0.22, 0, Math.PI * 2);
+          g.fill();
+          g.fillStyle = "#b9c4cf";
+          g.beginPath();
+          g.ellipse(-r * 1.0, ly, r * 0.17, r * 0.08, 0.4, 0, Math.PI * 2);
+          g.fill();
+          g.beginPath();
+          g.ellipse(-r * 0.96, ly + r * 0.06, r * 0.15, r * 0.07, -0.3, 0, Math.PI * 2);
           g.fill();
           continue;
         }

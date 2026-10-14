@@ -884,6 +884,54 @@ export function drawShipyard(g: CanvasRenderingContext2D, gx: number, gy: number
   });
 }
 
+// La fromagerie (3 × 3 cases) : la laiterie ; de la vapeur monte de la cuve quand on fabrique du fromage.
+export function drawDairy(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, making = false, t = 0) {
+  rotated(g, gx, gy, 3, rot, () => {
+    const x = gx * C;
+    const y = gy * C;
+    if (isViking()) {
+      const v = variant(gx, gy);
+      P.blit(g, `dairy:${v}`, gx, gy, 3, (c) => P.paintDairy(c, v * 239 + 83));
+    } else {
+      depotBody(g, gx, gy, 1, false);
+      g.fillStyle = "rgba(240,200,80,0.4)";
+      g.fillRect(x + 8, y + 8, 3 * C - 16, 2 * C - 20);
+      g.font = "34px sans-serif";
+      g.textAlign = "center";
+      g.fillText("🧀", x + 1.5 * C, y + 1.1 * C);
+    }
+    if (making) {
+      for (let i = 0; i < 3; i++) {
+        const k = (t / 1000 + i / 3) % 1;
+        g.fillStyle = `rgba(245,245,245,${0.55 * (1 - k)})`;
+        g.beginPath();
+        g.arc(x + 64 + Math.sin(k * 6 + i) * 6, y + 100 - k * 34, 6 + k * 7, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+  });
+}
+
+// Le port de pêche (3 × 3 cases, sur la côte) : le quai, le hangar, les séchoirs à poisson ; les barques sont dessinées en mer (`boats` : pêcheurs partis pêcher).
+export function drawFishport(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, boats = 0, t = 0) {
+  rotated(g, gx, gy, 3, rot, () => {
+    const x = gx * C;
+    const y = gy * C;
+    if (isViking()) {
+      const v = variant(gx, gy);
+      P.blit(g, `fishport:${v}`, gx, gy, 3, (c) => P.paintFishport(c, v * 233 + 79));
+      P.drawPier(g, x, y);
+    } else {
+      portBody(g, gx, gy);
+      g.font = "30px sans-serif";
+      g.textAlign = "center";
+      g.fillText("🐟", x + 1.5 * C, y + 1.9 * C);
+    }
+    P.drawBoat(g, x + 0.38 * C, y - 0.3 * C, t, gx, true); // la barque amarrée à côté du quai
+    for (let i = 0; i < boats; i++) P.drawBoat(g, x + 1.5 * C + (i % 2 ? 0.9 : -0.9) * C, y - 1.7 * C - Math.floor(i / 2) * 1.1 * C, t, gx + i * 3); // et celles qui sont en mer
+  });
+}
+
 // Le marché (3 × 3 cases) : trois étals aux auvents rayés, des caisses, et un fanion quand la caravane est là.
 export function drawMarket(g: CanvasRenderingContext2D, gx: number, gy: number, rot = 0, here = false, t = 0) {
   rotated(g, gx, gy, 3, rot, () => {
@@ -2878,6 +2926,8 @@ export function drawStructureThumb(canvas: HTMLCanvasElement, id: string) {
     else if (def.kind === "market") drawMarket(g, 0, 0, 0, true);
     else if (def.kind === "shipyard") drawShipyard(g, 0, 0, 0, 4);
     else if (def.kind === "tavern") drawTavern(g, 0, 0, 0, true);
+    else if (def.kind === "dairy") drawDairy(g, 0, 0, 0);
+    else if (def.kind === "fishport") drawFishport(g, 0, 0, 0);
     else if (def.kind === "pantry") drawDepot(g, 0, 0, 0, 1, true);
     else if (def.kind === "pigpen") drawPigpen(g, 0, 0, 0, [{ age: 300, eat: 0, drink: 0 }, { age: 100, eat: 0, drink: 0 }, { age: 300, eat: 0, drink: 0 }]);
     else drawDepot(g, 0, 0);
@@ -2911,8 +2961,8 @@ export function drawEntrance(g: CanvasRenderingContext2D, gx: number, gy: number
 
 // Chantier : fondations posées, puis le bâtiment qui monte à mesure que la construction avance.
 // have/need : bois livré ; progress : de 0 à 1 une fois les matériaux réunis.
-export function drawSite(g: CanvasRenderingContext2D, kind: "camp" | "depot" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market" | "shipyard" | "tavern" | "pantry", gx: number, gy: number, have: number, need: number, progress: number, t: number, rot = 0, undo = false, plank = false) {
-  const size = kind === "farm" ? 5 : kind === "shipyard" ? 6 : kind === "stable" || kind === "pigpen" ? 4 : kind === "depot" || kind === "pantry" || kind === "sawmill" || kind === "butcher" || kind === "port" || kind === "church" || kind === "market" || kind === "tavern" ? 3 : 2;
+export function drawSite(g: CanvasRenderingContext2D, kind: "camp" | "depot" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market" | "shipyard" | "tavern" | "pantry" | "fishport" | "dairy", gx: number, gy: number, have: number, need: number, progress: number, t: number, rot = 0, undo = false, plank = false) {
+  const size = kind === "farm" ? 5 : kind === "shipyard" ? 6 : kind === "stable" || kind === "pigpen" ? 4 : kind === "depot" || kind === "pantry" || kind === "fishport" || kind === "dairy" || kind === "sawmill" || kind === "butcher" || kind === "port" || kind === "church" || kind === "market" || kind === "tavern" ? 3 : 2;
   const x = gx * C;
   const y = gy * C;
   const w = size * C;
@@ -2956,6 +3006,8 @@ export function drawSite(g: CanvasRenderingContext2D, kind: "camp" | "depot" | "
     else if (kind === "shipyard") drawShipyard(g, gx, gy, rot);
     else if (kind === "tavern") drawTavern(g, gx, gy, rot);
     else if (kind === "pantry") drawDepot(g, gx, gy, rot, 1, true);
+    else if (kind === "fishport") drawFishport(g, gx, gy, rot);
+    else if (kind === "dairy") drawDairy(g, gx, gy, rot);
     else drawDepot(g, gx, gy, rot);
     g.restore();
     g.globalAlpha = 1;

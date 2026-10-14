@@ -36,6 +36,8 @@ export interface Save {
   lodges: Lodge[]; // camps de chasseur : la viande y est rapportée
   butchers: Butcher[]; // boucheries : préparent la viande
   ports: Port[]; // ports : exportent des marchandises contre des pièces
+  dairies: Dairy[]; // fromageries : le lait devient du fromage
+  fishports: Fishport[]; // ports de pêche : des pêcheurs rapportent du poisson
   taverns: Tavern[]; // tavernes : des plats qui redonnent de l'énergie
   shipyards: Shipyard[]; // chantiers navals : le grand drakkar
   island?: number; // numéro de l'île (0 : l'île de départ)
@@ -87,6 +89,8 @@ export function newSave(): Save {
     markets: [],
     shipyards: [],
     taverns: [],
+    fishports: [],
+    dairies: [],
     corpses: [],
     clock: DAY_SEC * DAY_START,
     grow: 0,
@@ -170,6 +174,8 @@ export function load(): Save {
         s.markets = st.markets ?? [];
         s.shipyards = st.shipyards ?? [];
         s.taverns = st.taverns ?? [];
+        s.fishports = st.fishports ?? [];
+        s.dairies = st.dairies ?? [];
         s.island = st.island;
         s.arrival = st.arrival;
         s.victory = st.victory;
@@ -370,12 +376,14 @@ export type Job =
   | { type: "gather"; depotId: number; gathered: number } // cueilleur : il ramasse les baies autour de ce dépôt et les y range
   | { type: "bee"; apiaryId: number; harvested: number } // apiculteur d'un rucher ; harvested : miel récolté
   | { type: "hunt"; lodgeId: number; hunted: number } // chasseur d'un camp ; hunted : viande rapportée
+  | { type: "cheese"; dairyId: number; made: number } // fromager d'une fromagerie ; made : fromages faits
+  | { type: "fish"; portId: number; caught: number } // pêcheur d'un port de pêche ; caught : poissons rapportés
   | { type: "cook"; tavernId: number; cooked: number } // cuisinier d'une taverne ; cooked : plats préparés
   | { type: "water"; houseId: number; hauled: number; food?: boolean; dine?: number }; // food : il va chercher à manger (à la boucherie) au lieu de l'eau
   // // corvée d'eau : un habitant remplit sa maison au puits ; hauled : eau livrée
 
 // Métier d'un personnage : il détermine sa tenue. Le travail vient après.
-export type Role = "none" | "wood" | "haul" | "build" | "water" | "hunt" | "bee" | "craft" | "gather" | "heal" | "bury" | "farm" | "tend" | "swine" | "cook";
+export type Role = "none" | "wood" | "haul" | "build" | "water" | "hunt" | "bee" | "craft" | "gather" | "heal" | "bury" | "farm" | "tend" | "swine" | "cook" | "fish" | "cheese";
 
 export interface WorkerSave {
   id: number;
@@ -411,11 +419,11 @@ export interface WorkerSave {
   dish?: string; // la recette du plat qu'il porte (cuisinier)
   fedFor?: number; // secondes pendant lesquelles un bon repas le rassasie : il n'a pas faim
   shunned?: number[]; // maisons qu'il a quittées exaspéré : il n'y retourne pas tant que la gêne y reste forte
-  cargo?: "wood" | "plank" | "water" | "meat" | "cuts" | "honey" | "berries" | "tisane" | "syrup" | "body" | "milk" | "meal" | FarmCrop; // ce qu'il porte : des bûches (par défaut), des planches ou de l'eau
+  cargo?: "wood" | "plank" | "water" | "meat" | "cuts" | "honey" | "berries" | "tisane" | "syrup" | "body" | "milk" | "meal" | "fish" | "cheese" | FarmCrop; // ce qu'il porte : des bûches (par défaut), des planches ou de l'eau
 }
 
-export const FEMALE_NAMES = ["Léa", "Maëlle", "Nina", "Zoé", "Camille"]; // pour accorder les phrases
-export const CREW_NAMES = ["Gaspard", "Léa", "Hugo", "Maëlle", "Tom", "Nina", "Paul", "Zoé", "Jules", "Camille"];
+export const FEMALE_NAMES = ["Léa", "Maëlle", "Nina", "Zoé", "Camille", "Alice", "Inès", "Chloé", "Manon", "Jade", "Louise", "Lina", "Rose", "Anaïs", "Eva"]; // pour accorder les phrases
+export const CREW_NAMES = ["Gaspard", "Léa", "Hugo", "Maëlle", "Tom", "Nina", "Paul", "Zoé", "Jules", "Camille", "Louis", "Hector", "Théo", "Noé", "Lucas", "Arthur", "Éliot", "Mathis", "Axel", "Baptiste", "Alice", "Inès", "Chloé", "Manon", "Jade", "Louise", "Lina", "Rose", "Anaïs", "Eva"];
 export const CREW_COLORS = ["#3c7fc4", "#c4513c", "#4c9a52", "#8e5bb5", "#d19a2a", "#2f9aa0"];
 
 
@@ -502,6 +510,8 @@ export interface Depot {
   planks?: number; // planches stockées
   cuts?: number; // viande préparée stockée (comptée à part des planches ; elles se partagent les places du dépôt)
   honey?: number; // pots de miel stockés (à part, mais dans les mêmes places)
+  cheese?: number; // fromage (nourriture, se garde bien et s'exporte)
+  fish?: number; // poisson (nourriture) rapporté par les pêcheurs
   dishes?: Record<string, number>; // plats préparés rangés ici (garde-manger) : ils comptent dans les places
   pantry?: boolean; // garde-manger : il range toute la nourriture (viande, baies, miel, lait, récoltes) ; le reste va dans les dépôts ordinaires
   level?: number; // 1 (défaut), 2 ou 3 : plus de places et un autre aspect
@@ -551,7 +561,7 @@ export function depotAt(s: Save, gx: number, gy: number): Depot | null {
 
 // Une case est occupée par un camp ou un dépôt : obstacle pour les personnages et pour la construction.
 export function occupied(s: Save, gx: number, gy: number): boolean {
-  return !!campAt(s, gx, gy) || !!depotAt(s, gx, gy) || !!houseAt(s, gx, gy) || !!sawmillAt(s, gx, gy) || !!wellAt(s, gx, gy) || !!lodgeAt(s, gx, gy) || !!butcherAt(s, gx, gy) || !!portAt(s, gx, gy) || !!apiaryAt(s, gx, gy) || !!clinicAt(s, gx, gy) || !!churchAt(s, gx, gy) || !!farmAt(s, gx, gy) || !!stableAt(s, gx, gy) || !!pigpenAt(s, gx, gy) || !!marketAt(s, gx, gy) || !!shipyardAt(s, gx, gy) || !!tavernAt(s, gx, gy) || !!siteAt(s, gx, gy);
+  return !!campAt(s, gx, gy) || !!depotAt(s, gx, gy) || !!houseAt(s, gx, gy) || !!sawmillAt(s, gx, gy) || !!wellAt(s, gx, gy) || !!lodgeAt(s, gx, gy) || !!butcherAt(s, gx, gy) || !!portAt(s, gx, gy) || !!apiaryAt(s, gx, gy) || !!clinicAt(s, gx, gy) || !!churchAt(s, gx, gy) || !!farmAt(s, gx, gy) || !!stableAt(s, gx, gy) || !!pigpenAt(s, gx, gy) || !!marketAt(s, gx, gy) || !!shipyardAt(s, gx, gy) || !!tavernAt(s, gx, gy) || !!fishportAt(s, gx, gy) || !!dairyAt(s, gx, gy) || !!siteAt(s, gx, gy);
 }
 
 export function roadAt(s: Save, gx: number, gy: number): boolean {
@@ -631,7 +641,7 @@ export function consolidateFood(s: Save): boolean {
   if (!pantries.length) return false;
   const stores = s.depots.filter((d) => !d.pantry);
   let moved = false;
-  const food: ("cuts" | "honey" | "berries" | "milk" | "meat")[] = ["cuts", "honey", "berries", "milk", "meat"];
+  const food: ("cuts" | "honey" | "berries" | "milk" | "meat" | "fish" | "cheese")[] = ["cuts", "honey", "berries", "milk", "meat", "fish", "cheese"];
   for (const d of stores) {
     for (const k of food) {
       let n = d[k] ?? 0;
@@ -749,7 +759,7 @@ export const depotEntrance = (d: Placed): Pos => entranceAt(d, 3, 1); // sous la
 
 export function isEntrance(s: Save, gx: number, gy: number): boolean {
   const is = (e: Pos) => e.gx === gx && e.gy === gy;
-  return s.camps.some((c) => is(campEntrance(c))) || s.houses.some((h) => is(houseEntrance(h))) || s.sawmills.some((m) => is(sawmillEntrance(m))) || s.wells.some((m) => is(wellEntrance(m))) || s.lodges.some((m) => is(lodgeEntrance(m))) || s.butchers.some((m) => is(butcherEntrance(m))) || s.ports.some((m) => is(portEntrance(m))) || s.apiaries.some((m) => is(apiaryEntrance(m))) || s.clinics.some((m) => is(clinicEntrance(m))) || s.churches.some((m) => is(churchEntrance(m))) || s.farms.some((m) => is(farmEntrance(m))) || s.stables.some((m) => is(stableEntrance(m))) || s.pigpens.some((m) => is(pigpenEntrance(m))) || s.markets.some((m) => is(marketEntrance(m))) || s.shipyards.some((m) => is(shipyardEntrance(m))) || s.taverns.some((m) => is(tavernEntrance(m))) || s.depots.some((d) => is(depotEntrance(d))) || s.sites.some((t) => is(siteEntrance(t)));
+  return s.camps.some((c) => is(campEntrance(c))) || s.houses.some((h) => is(houseEntrance(h))) || s.sawmills.some((m) => is(sawmillEntrance(m))) || s.wells.some((m) => is(wellEntrance(m))) || s.lodges.some((m) => is(lodgeEntrance(m))) || s.butchers.some((m) => is(butcherEntrance(m))) || s.ports.some((m) => is(portEntrance(m))) || s.apiaries.some((m) => is(apiaryEntrance(m))) || s.clinics.some((m) => is(clinicEntrance(m))) || s.churches.some((m) => is(churchEntrance(m))) || s.farms.some((m) => is(farmEntrance(m))) || s.stables.some((m) => is(stableEntrance(m))) || s.pigpens.some((m) => is(pigpenEntrance(m))) || s.markets.some((m) => is(marketEntrance(m))) || s.shipyards.some((m) => is(shipyardEntrance(m))) || s.taverns.some((m) => is(tavernEntrance(m))) || s.fishports.some((m) => is(fishportEntrance(m))) || s.dairies.some((m) => is(dairyEntrance(m))) || s.depots.some((d) => is(depotEntrance(d))) || s.sites.some((t) => is(siteEntrance(t)));
 }
 
 // ---- Bois : camps, dépôts et transport ----
@@ -771,7 +781,7 @@ export function takeFromCamp(camp: Camp, max: number): number {
 export const depotLevel = (d: Depot) => Math.min(DEPOT_LEVELS.length, Math.max(1, d.level ?? 1));
 export const depotCapacity = (d: Depot) => DEPOT_LEVELS[depotLevel(d) - 1].cap * (d.pantry ? 2 : 1); // un garde-manger a deux fois la place d'un dépôt
 export const dishTotal = (d: Depot) => Object.values(d.dishes ?? {}).reduce((a, n) => a + n, 0);
-export const depotFree = (d: Depot) => Math.max(0, depotCapacity(d) - (d.planks ?? 0) - (d.cuts ?? 0) - (d.honey ?? 0) - (d.berries ?? 0) - (d.milk ?? 0) - (d.meat ?? 0) - cropTotal(d) - dishTotal(d)); // un dépôt stocke des planches et de la viande préparée : ils se partagent ses places
+export const depotFree = (d: Depot) => Math.max(0, depotCapacity(d) - (d.planks ?? 0) - (d.cuts ?? 0) - (d.honey ?? 0) - (d.berries ?? 0) - (d.milk ?? 0) - (d.meat ?? 0) - cropTotal(d) - dishTotal(d) - (d.fish ?? 0) - (d.cheese ?? 0)); // un dépôt stocke des planches et de la viande préparée : ils se partagent ses places
 export const storageCapacity = (s: Save) => s.depots.reduce((a, d) => a + depotCapacity(d), 0);
 export const woodStock = (s: Save) => s.depots.reduce((a, d) => a + d.wood, 0);
 export const storageFree = (s: Save) => s.depots.reduce((a, d) => a + depotFree(d), 0);
@@ -815,7 +825,7 @@ export function refundWood(s: Save, n: number) {
 
 // ---- Chantiers ----
 
-export type SiteKind = "camp" | "depot" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market" | "shipyard" | "tavern" | "pantry";
+export type SiteKind = "camp" | "depot" | "house" | "sawmill" | "well" | "lodge" | "butcher" | "port" | "apiary" | "clinic" | "church" | "farm" | "stable" | "pigpen" | "market" | "shipyard" | "tavern" | "pantry" | "fishport" | "dairy";
 
 // Un chantier : les fondations sont posées, puis on y livre les matériaux, puis le bâtiment se construit.
 export interface Site {
@@ -832,8 +842,8 @@ export interface Site {
   undo?: Gain; // démontage en cours : l'avancement redescend tout seul, puis ceci est rendu
 }
 
-export const siteSize = (k: SiteKind) => (k === "farm" ? FARM_SIZE : k === "shipyard" ? SHIPYARD_SIZE : k === "stable" || k === "pigpen" ? STABLE_SIZE : k === "pantry" || k === "tavern" || k === "market" || k === "depot" || k === "sawmill" || k === "butcher" || k === "port" || k === "church" ? 3 : 2);
-export const siteEntrance = (t: Site): Pos => (t.kind === "depot" || t.kind === "pantry" ? depotEntrance(t) : t.kind === "sawmill" ? sawmillEntrance(t) : t.kind === "well" ? wellEntrance(t) : t.kind === "apiary" ? apiaryEntrance(t) : t.kind === "clinic" ? clinicEntrance(t) : t.kind === "church" ? churchEntrance(t) : t.kind === "farm" ? farmEntrance(t) : t.kind === "stable" ? stableEntrance(t) : t.kind === "tavern" ? tavernEntrance(t) : t.kind === "shipyard" ? shipyardEntrance(t) : t.kind === "market" ? marketEntrance(t) : t.kind === "pigpen" ? pigpenEntrance(t) : t.kind === "port" ? portEntrance(t) : t.kind === "butcher" ? butcherEntrance(t) : t.kind === "lodge" ? lodgeEntrance(t) : t.kind === "house" ? houseEntrance(t) : campEntrance(t));
+export const siteSize = (k: SiteKind) => (k === "farm" ? FARM_SIZE : k === "shipyard" ? SHIPYARD_SIZE : k === "stable" || k === "pigpen" ? STABLE_SIZE : k === "dairy" || k === "fishport" || k === "pantry" || k === "tavern" || k === "market" || k === "depot" || k === "sawmill" || k === "butcher" || k === "port" || k === "church" ? 3 : 2);
+export const siteEntrance = (t: Site): Pos => (t.kind === "depot" || t.kind === "pantry" ? depotEntrance(t) : t.kind === "sawmill" ? sawmillEntrance(t) : t.kind === "well" ? wellEntrance(t) : t.kind === "apiary" ? apiaryEntrance(t) : t.kind === "clinic" ? clinicEntrance(t) : t.kind === "church" ? churchEntrance(t) : t.kind === "farm" ? farmEntrance(t) : t.kind === "stable" ? stableEntrance(t) : t.kind === "dairy" ? dairyEntrance(t) : t.kind === "fishport" ? fishportEntrance(t) : t.kind === "tavern" ? tavernEntrance(t) : t.kind === "shipyard" ? shipyardEntrance(t) : t.kind === "market" ? marketEntrance(t) : t.kind === "pigpen" ? pigpenEntrance(t) : t.kind === "port" ? portEntrance(t) : t.kind === "butcher" ? butcherEntrance(t) : t.kind === "lodge" ? lodgeEntrance(t) : t.kind === "house" ? houseEntrance(t) : campEntrance(t));
 const nextSiteId = (s: Save) => Math.max(0, ...s.sites.map((t) => t.id)) + 1;
 
 export function siteAt(s: Save, gx: number, gy: number): Site | null {
@@ -859,6 +869,8 @@ export function workOnSite(s: Save, t: Site, dt: number): boolean {
   const rot = t.rot ?? 0;
   if (t.kind === "sawmill") s.sawmills.push({ id: Math.max(0, ...s.sawmills.map((m) => m.id)) + 1, gx: t.gx, gy: t.gy, rot, logs: 0, planks: 0, prog: 0 });
   else if (t.kind === "house") s.houses.push({ id: Math.max(0, ...s.houses.map((h) => h.id)) + 1, gx: t.gx, gy: t.gy, rot, water: HOUSE_WATER_START, food: HOUSE_FOOD_START });
+  else if (t.kind === "dairy") s.dairies.push({ id: Math.max(0, ...s.dairies.map((m) => m.id)) + 1, gx: t.gx, gy: t.gy, rot, milk: 0 });
+  else if (t.kind === "fishport") s.fishports.push({ id: Math.max(0, ...s.fishports.map((m) => m.id)) + 1, gx: t.gx, gy: t.gy, rot });
   else if (t.kind === "pantry") s.depots.push({ id: Math.max(0, ...s.depots.map((d) => d.id)) + 1, gx: t.gx, gy: t.gy, wood: 0, rot, pantry: true });
   else if (t.kind === "tavern") s.taverns.push({ id: Math.max(0, ...s.taverns.map((m) => m.id)) + 1, gx: t.gx, gy: t.gy, rot, pantry: {}, dishes: {} });
   else if (t.kind === "shipyard") s.shipyards.push({ id: Math.max(0, ...s.shipyards.map((m) => m.id)) + 1, gx: t.gx, gy: t.gy, rot, stage: 0, have: {} });
@@ -887,7 +899,9 @@ export interface Gain {
 }
 
 // Ce qu'on récupère en démontant un bâtiment : la moitié du prix, la moitié des matériaux de construction, et ce qu'il contenait.
-export function dismantleGain(s: Save, b: House | Camp | Depot | Sawmill | Well | Lodge | Butcher | Port | Apiary | Clinic | Church | Farm | Stable | Pigpen | Market | Shipyard | Tavern): Gain {
+export function dismantleGain(s: Save, b: House | Camp | Depot | Sawmill | Well | Lodge | Butcher | Port | Apiary | Clinic | Church | Farm | Stable | Pigpen | Market | Shipyard | Tavern | Fishport | Dairy): Gain {
+  if (s.dairies.includes(b as Dairy)) return { coins: Math.floor(COSTS.dairy.coins / 2), wood: 0, planks: Math.floor(COSTS.dairy.mat / 2) };
+  if (s.fishports.includes(b as Fishport)) return { coins: Math.floor(COSTS.fishport.coins / 2), wood: 0, planks: Math.floor(COSTS.fishport.mat / 2) };
   if (s.taverns.includes(b as Tavern)) return { coins: Math.floor(COSTS.tavern.coins / 2), wood: 0, planks: Math.floor(COSTS.tavern.mat / 2) };
   if (s.shipyards.includes(b as Shipyard)) return { coins: Math.floor(COSTS.shipyard.coins / 2), wood: 0, planks: Math.floor(COSTS.shipyard.mat / 2) };
   if (s.markets.includes(b as Market)) return { coins: Math.floor(COSTS.market.coins / 2), wood: 0, planks: Math.floor(COSTS.market.mat / 2) };
@@ -911,9 +925,9 @@ export function dismantleGain(s: Save, b: House | Camp | Depot | Sawmill | Well 
 }
 
 // Le bâtiment devient un chantier de démontage : il se défait en DISMANTLE_SEC secondes, puis le gain est rendu (voir tickDismantle).
-export function startDismantle(s: Save, b: House | Camp | Depot | Sawmill | Well | Lodge | Butcher | Port | Apiary | Clinic | Church | Farm | Stable | Pigpen | Market | Shipyard | Tavern) {
+export function startDismantle(s: Save, b: House | Camp | Depot | Sawmill | Well | Lodge | Butcher | Port | Apiary | Clinic | Church | Farm | Stable | Pigpen | Market | Shipyard | Tavern | Fishport | Dairy) {
   const gain = dismantleGain(s, b);
-  const kind: SiteKind = s.taverns.includes(b as Tavern) ? "tavern" : s.shipyards.includes(b as Shipyard) ? "shipyard" : s.markets.includes(b as Market) ? "market" : s.pigpens.includes(b as Pigpen) ? "pigpen" : s.stables.includes(b as Stable) ? "stable" : s.farms.includes(b as Farm) ? "farm" : s.churches.includes(b as Church) ? "church" : s.clinics.includes(b as Clinic) ? "clinic" : s.apiaries.includes(b as Apiary) ? "apiary" : s.ports.includes(b as Port) ? "port" : s.butchers.includes(b as Butcher) ? "butcher" : s.lodges.includes(b as Lodge) ? "lodge" : s.wells.includes(b as Well) ? "well" : s.sawmills.includes(b as Sawmill) ? "sawmill" : s.houses.includes(b as House) ? "house" : s.camps.includes(b as Camp) ? "camp" : "depot";
+  const kind: SiteKind = s.dairies.includes(b as Dairy) ? "dairy" : s.fishports.includes(b as Fishport) ? "fishport" : s.taverns.includes(b as Tavern) ? "tavern" : s.shipyards.includes(b as Shipyard) ? "shipyard" : s.markets.includes(b as Market) ? "market" : s.pigpens.includes(b as Pigpen) ? "pigpen" : s.stables.includes(b as Stable) ? "stable" : s.farms.includes(b as Farm) ? "farm" : s.churches.includes(b as Church) ? "church" : s.clinics.includes(b as Clinic) ? "clinic" : s.apiaries.includes(b as Apiary) ? "apiary" : s.ports.includes(b as Port) ? "port" : s.butchers.includes(b as Butcher) ? "butcher" : s.lodges.includes(b as Lodge) ? "lodge" : s.wells.includes(b as Well) ? "well" : s.sawmills.includes(b as Sawmill) ? "sawmill" : s.houses.includes(b as House) ? "house" : s.camps.includes(b as Camp) ? "camp" : "depot";
   s.houses = s.houses.filter((h) => h !== b);
   s.camps = s.camps.filter((c) => c !== b);
   s.depots = s.depots.filter((d) => d !== b);
@@ -931,6 +945,8 @@ export function startDismantle(s: Save, b: House | Camp | Depot | Sawmill | Well
   s.markets = s.markets.filter((m) => m !== b);
   s.shipyards = s.shipyards.filter((m) => m !== b);
   s.taverns = s.taverns.filter((m) => m !== b);
+  s.fishports = s.fishports.filter((m) => m !== b);
+  s.dairies = s.dairies.filter((m) => m !== b);
   for (const w of s.workers) if (kind === "house" && w.home === (b as House).id) w.home = null;
   s.sites.push({ id: nextSiteId(s), kind, rot: b.rot, gx: b.gx, gy: b.gy, need: 0, have: 0, progress: 1, buildSec: DISMANTLE_SEC, undo: gain });
 }
@@ -954,7 +970,7 @@ export function tickDismantle(s: Save, dt: number): Gain[] {
 // Ce que rend l'annulation d'un chantier : la moitié des pièces et tous les matériaux déjà livrés.
 export function siteRefund(t: Site): Gain {
   if (t.undo) return t.undo;
-  const coins = t.kind === "pantry" ? Math.floor(COSTS.pantry.coins / 2) : t.kind === "tavern" ? Math.floor(COSTS.tavern.coins / 2) : t.kind === "shipyard" ? Math.floor(COSTS.shipyard.coins / 2) : t.kind === "market" ? Math.floor(COSTS.market.coins / 2) : t.kind === "pigpen" ? Math.floor(COSTS.pigpen.coins / 2) : t.kind === "stable" ? Math.floor(COSTS.stable.coins / 2) : t.kind === "farm" ? Math.floor(COSTS.farm.coins / 2) : t.kind === "church" ? Math.floor(COSTS.church.coins / 2) : t.kind === "clinic" ? Math.floor(COSTS.clinic.coins / 2) : t.kind === "apiary" ? Math.floor(COSTS.apiary.coins / 2) : t.kind === "port" ? Math.floor(PORT_COST / 2) : t.kind === "butcher" ? Math.floor(BUTCHER_COST / 2) : t.kind === "lodge" ? Math.floor(LODGE_COST / 2) : t.kind === "well" ? Math.floor(WELL_COST / 2) : t.kind === "camp" ? Math.floor(CAMP_COST / 2) : t.kind === "house" ? Math.floor(HOUSE_COST / 2) : t.kind === "sawmill" ? Math.floor(SAWMILL_COST / 2) : 0;
+  const coins = t.kind === "dairy" ? Math.floor(COSTS.dairy.coins / 2) : t.kind === "fishport" ? Math.floor(COSTS.fishport.coins / 2) : t.kind === "pantry" ? Math.floor(COSTS.pantry.coins / 2) : t.kind === "tavern" ? Math.floor(COSTS.tavern.coins / 2) : t.kind === "shipyard" ? Math.floor(COSTS.shipyard.coins / 2) : t.kind === "market" ? Math.floor(COSTS.market.coins / 2) : t.kind === "pigpen" ? Math.floor(COSTS.pigpen.coins / 2) : t.kind === "stable" ? Math.floor(COSTS.stable.coins / 2) : t.kind === "farm" ? Math.floor(COSTS.farm.coins / 2) : t.kind === "church" ? Math.floor(COSTS.church.coins / 2) : t.kind === "clinic" ? Math.floor(COSTS.clinic.coins / 2) : t.kind === "apiary" ? Math.floor(COSTS.apiary.coins / 2) : t.kind === "port" ? Math.floor(PORT_COST / 2) : t.kind === "butcher" ? Math.floor(BUTCHER_COST / 2) : t.kind === "lodge" ? Math.floor(LODGE_COST / 2) : t.kind === "well" ? Math.floor(WELL_COST / 2) : t.kind === "camp" ? Math.floor(CAMP_COST / 2) : t.kind === "house" ? Math.floor(HOUSE_COST / 2) : t.kind === "sawmill" ? Math.floor(SAWMILL_COST / 2) : 0;
   return { coins, wood: t.mat === "plank" ? 0 : t.have, planks: t.mat === "plank" ? t.have : 0 };
 }
 
@@ -991,7 +1007,7 @@ export function workCell(s: Save, t: Site, from: Pos): Pos | null {
 // Tourne un bâtiment d'un quart de tour, dans le sens des aiguilles d'une montre. Son entrée change de côté : on passe
 // à la première orientation dont l'entrée est libre. Renvoie false s'il n'y a pas de place pour l'entrée.
 export function rotateBuilding(s: Save, b: { gx: number; gy: number; rot?: number }, kind: SiteKind): boolean {
-  const entrance = kind === "pantry" ? depotEntrance : kind === "tavern" ? tavernEntrance : kind === "shipyard" ? shipyardEntrance : kind === "market" ? marketEntrance : kind === "pigpen" ? pigpenEntrance : kind === "stable" ? stableEntrance : kind === "farm" ? farmEntrance : kind === "church" ? churchEntrance : kind === "clinic" ? clinicEntrance : kind === "apiary" ? apiaryEntrance : kind === "port" ? portEntrance : kind === "butcher" ? butcherEntrance : kind === "lodge" ? lodgeEntrance : kind === "well" ? wellEntrance : kind === "depot" ? depotEntrance : kind === "house" ? houseEntrance : kind === "sawmill" ? sawmillEntrance : campEntrance;
+  const entrance = kind === "dairy" ? dairyEntrance : kind === "fishport" ? fishportEntrance : kind === "pantry" ? depotEntrance : kind === "tavern" ? tavernEntrance : kind === "shipyard" ? shipyardEntrance : kind === "market" ? marketEntrance : kind === "pigpen" ? pigpenEntrance : kind === "stable" ? stableEntrance : kind === "farm" ? farmEntrance : kind === "church" ? churchEntrance : kind === "clinic" ? clinicEntrance : kind === "apiary" ? apiaryEntrance : kind === "port" ? portEntrance : kind === "butcher" ? butcherEntrance : kind === "lodge" ? lodgeEntrance : kind === "well" ? wellEntrance : kind === "depot" ? depotEntrance : kind === "house" ? houseEntrance : kind === "sawmill" ? sawmillEntrance : campEntrance;
   const old = entrance(b);
   for (let k = 1; k <= 3; k++) {
     const rot = ((b.rot ?? 0) + k) % 4;
@@ -1498,7 +1514,7 @@ export type ExportSrc = Depot | Sawmill | Butcher | Camp | Lodge;
 export function goodsOf(kind: ExportSrcKind, src: ExportSrc): Partial<Record<ExportGood, number>> {
   if (kind === "depot") {
     const d = src as Depot;
-    return { plank: d.planks ?? 0, cuts: d.cuts ?? 0, honey: d.honey ?? 0, berries: d.berries ?? 0, wood: d.wood, meat: d.meat ?? 0, milk: d.milk ?? 0, wheat: d.crops?.wheat ?? 0, corn: d.crops?.corn ?? 0, tomato: d.crops?.tomato ?? 0, carrot: d.crops?.carrot ?? 0, grass: d.crops?.grass ?? 0 };
+    return { plank: d.planks ?? 0, cuts: d.cuts ?? 0, honey: d.honey ?? 0, berries: d.berries ?? 0, wood: d.wood, meat: d.meat ?? 0, milk: d.milk ?? 0, fish: d.fish ?? 0, cheese: d.cheese ?? 0, wheat: d.crops?.wheat ?? 0, corn: d.crops?.corn ?? 0, tomato: d.crops?.tomato ?? 0, carrot: d.crops?.carrot ?? 0, grass: d.crops?.grass ?? 0 };
   }
   if (kind === "sawmill") return { plank: (src as Sawmill).planks };
   if (kind === "butcher") return { cuts: (src as Butcher).cuts };
@@ -1520,6 +1536,8 @@ export function takeGood(kind: ExportSrcKind, src: ExportSrc, good: Good, max: n
     else if (good === "wood") d.wood -= n;
     else if (good === "milk") d.milk = (d.milk ?? 0) - n;
     else if (good === "meat") d.meat = (d.meat ?? 0) - n;
+    else if (good === "fish") d.fish = (d.fish ?? 0) - n;
+    else if (good === "cheese") d.cheese = (d.cheese ?? 0) - n;
     else if (good === "wheat" || good === "corn" || good === "tomato" || good === "carrot" || good === "grass") d.crops = { ...(d.crops ?? {}), [good]: (d.crops?.[good] ?? 0) - n };
   } else if (kind === "sawmill") (src as Sawmill).planks -= n;
   else if (kind === "butcher") (src as Butcher).cuts -= n;
@@ -1791,6 +1809,73 @@ function stableLocal(m: Stable, cx: number, cy: number): Pos {
 // où l'éleveur trait les vaches, et où il remplit l'auge et l'abreuvoir
 export const stableMilkCell = (m: Stable): Pos => stableLocal(m, 1, 2);
 export const stableTroughCell = (m: Stable): Pos => stableLocal(m, 2, 3);
+
+// ---- Le fromage ----
+
+export interface Dairy {
+  id: number;
+  gx: number;
+  gy: number;
+  rot?: number;
+  milk: number; // lait en cuve, rapporté du garde-manger
+}
+
+export function dairyAt(s: Save, gx: number, gy: number): Dairy | null {
+  return s.dairies.find((m) => gx >= m.gx && gx < m.gx + 3 && gy >= m.gy && gy < m.gy + 3) ?? null;
+}
+
+export const dairyEntrance = (m: Placed): Pos => entranceAt(m, 3, 1);
+export const canPlaceDairy = (s: Save, gx: number, gy: number, rot = 0) => footprintFree(s, gx, gy, 3) && entranceOk(s, dairyEntrance({ gx, gy, rot }));
+
+export function placeDairy(s: Save, gx: number, gy: number, instant = false, rot = 0): BuildResult {
+  const door = dairyEntrance({ gx, gy, rot });
+  if (!footprintTerrainOk(s, gx, gy, 3) || !canBuild(s, door.gx, door.gy)) return "terrain";
+  if (!canPlaceDairy(s, gx, gy, rot)) return "blocked";
+  if (s.coins < COSTS.dairy.coins) return "poor";
+  s.coins -= COSTS.dairy.coins;
+  if (instant) s.dairies.push({ id: Math.max(0, ...s.dairies.map((m) => m.id)) + 1, gx, gy, rot, milk: 0 });
+  else s.sites.push({ id: nextSiteId(s), kind: "dairy", rot, gx, gy, need: COSTS.dairy.mat, mat: "plank", have: 0, progress: 0, buildSec: COSTS.dairy.sec });
+  return "ok";
+}
+
+export function removeDairy(s: Save, m: Dairy) {
+  s.dairies = s.dairies.filter((x) => x !== m);
+  s.coins += Math.floor(COSTS.dairy.coins / 2);
+  refundPlanks(s, Math.floor(COSTS.dairy.mat / 2));
+}
+
+// ---- La pêche ----
+
+export interface Fishport {
+  id: number;
+  gx: number;
+  gy: number;
+  rot?: number; // côté de la mer (choisi tout seul d'après la côte, comme le port)
+}
+
+export function fishportAt(s: Save, gx: number, gy: number): Fishport | null {
+  return s.fishports.find((m) => gx >= m.gx && gx <= m.gx + 2 && gy >= m.gy && gy <= m.gy + 2) ?? null;
+}
+
+export const fishportEntrance = (m: Placed): Pos => entranceAt(m, 3, 1);
+export const canPlaceFishport = (s: Save, gx: number, gy: number) => portRot(s, gx, gy) >= 0;
+
+// Pose un port de pêche : comme le port, il faut une côte dégagée ; l'orientation vient de la côte.
+export function placeFishport(s: Save, gx: number, gy: number, instant = false): BuildResult {
+  const rot = portRot(s, gx, gy);
+  if (rot < 0) return "terrain";
+  if (s.coins < COSTS.fishport.coins) return "poor";
+  s.coins -= COSTS.fishport.coins;
+  if (instant) s.fishports.push({ id: Math.max(0, ...s.fishports.map((m) => m.id)) + 1, gx, gy, rot });
+  else s.sites.push({ id: nextSiteId(s), kind: "fishport", rot, gx, gy, need: COSTS.fishport.mat, mat: "plank", have: 0, progress: 0, buildSec: COSTS.fishport.sec });
+  return "ok";
+}
+
+export function removeFishport(s: Save, m: Fishport) {
+  s.fishports = s.fishports.filter((x) => x !== m);
+  s.coins += Math.floor(COSTS.fishport.coins / 2);
+  refundPlanks(s, Math.floor(COSTS.fishport.mat / 2));
+}
 
 // ---- La taverne ----
 
@@ -2073,6 +2158,8 @@ function giveGood(d: Depot, good: ExportGood, n: number): number {
   else if (good === "wood") d.wood += taken;
   else if (good === "milk") d.milk = (d.milk ?? 0) + taken;
   else if (good === "meat") d.meat = (d.meat ?? 0) + taken;
+  else if (good === "fish") d.fish = (d.fish ?? 0) + taken;
+  else if (good === "cheese") d.cheese = (d.cheese ?? 0) + taken;
   else d.crops = { ...(d.crops ?? {}), [good]: (d.crops?.[good as FarmCrop] ?? 0) + taken };
   return taken;
 }
