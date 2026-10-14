@@ -65,10 +65,11 @@ export type SwinePlan =
 export type CookPlan =
   | { type: "fetch"; target: Cell; depotId: number; good: ExportGood } // prendre des ingrédients au dépôt
   | { type: "stock"; target: Cell } // les ranger au garde-manger de la taverne
-  | { type: "cook"; target: Cell; recipe: string }; // préparer un plat (il entre en cuisine)
+  | { type: "cook"; target: Cell; recipe: string } // préparer un plat (il entre en cuisine)
+  | { type: "store"; target: Cell; depotId: number }; // porter le plat préparé au garde-manger
 
 // Un villageois qui va manger à la taverne.
-export type DinePlan = { type: "eat"; target: Cell };
+export type DinePlan = { type: "eat"; target: Cell; depotId?: number }; // depotId : il mange au garde-manger (sinon à la taverne)
 
 export interface WorkerEnv {
   findPath(from: Cell, to: Cell, self: Worker): [number, number][] | null; // contourne les personnages immobiles
@@ -1097,11 +1098,11 @@ export class Worker {
     const job = d.job;
     if (!job) return this.moving ? "En route" : "Disponible";
     if (this.waiting && !this.moving) return "Rien à faire pour le moment";
-    const what = d.cargo === "plank" ? "🪚" : d.cargo === "water" ? "💧" : d.cargo === "meat" ? "🍖" : d.cargo === "cuts" ? "🥩" : d.cargo === "honey" ? "🍯" : d.cargo === "berries" ? "🫐" : d.cargo === "tisane" ? "🍵" : d.cargo === "syrup" ? "🧪" : d.cargo === "body" ? "⚰️" : d.cargo === "milk" ? "🥛" : d.cargo && d.cargo in FARM_CROPS ? FARM_CROPS[d.cargo as FarmCrop].emoji : "🪵";
+    const what = d.cargo === "plank" ? "🪚" : d.cargo === "water" ? "💧" : d.cargo === "meat" ? "🍖" : d.cargo === "cuts" ? "🥩" : d.cargo === "honey" ? "🍯" : d.cargo === "berries" ? "🫐" : d.cargo === "tisane" ? "🍵" : d.cargo === "syrup" ? "🧪" : d.cargo === "body" ? "⚰️" : d.cargo === "milk" ? "🥛" : d.cargo === "meal" ? "🍲" : d.cargo && d.cargo in FARM_CROPS ? FARM_CROPS[d.cargo as FarmCrop].emoji : "🪵";
     const load = d.carry > 0 ? ` · ${d.carry} ${what}` : "";
     switch (job.type) {
       case "cook":
-        return this.state === "stalling" ? (this.stallTask?.type === "cook" ? "Prépare un plat" : this.stallTask?.type === "fetch" ? "Prend des ingrédients" : "Range les ingrédients") : d.carry > 0 ? "Rapporte des ingrédients" : this.moving ? "Va chercher des ingrédients" : "Veille sur les fourneaux";
+        return this.state === "stalling" ? (this.stallTask?.type === "cook" ? "Prépare un plat" : this.stallTask?.type === "fetch" ? "Prend des ingrédients" : this.stallTask?.type === "store" ? "Range le plat au cellier" : "Range les ingrédients") : d.carry > 0 ? (d.cargo === "meal" ? "Porte le plat au cellier" : "Rapporte des ingrédients") : this.moving ? "Va chercher des ingrédients" : "Veille sur les fourneaux";
       case "swine":
         return this.state === "stalling" ? (this.stallTask?.type === "slaughter" ? "Abat un cochon" : this.stallTask?.type === "feed" ? "Remplit l'auge" : this.stallTask?.type === "pour" ? "Remplit l'abreuvoir" : this.stallTask?.type === "deliver" ? "Range la viande" : "Charge") : d.carry > 0 ? (d.cargo === "meat" ? `Porte la viande${load}` : d.cargo === "water" ? "Rapporte de l'eau" : "Rapporte des légumes") : this.moving ? "En tournée" : "Veille sur les cochons";
       case "tend":
@@ -2735,6 +2736,22 @@ export class Worker {
           g.fillStyle = "#f2ead8";
           g.beginPath();
           g.arc(-r * 0.62, ly, r * 0.08, 0, Math.PI * 2);
+          g.fill();
+          continue;
+        }
+        if (this.data.cargo === "meal") {
+          // un bol de plat fumant
+          g.fillStyle = "#6a4a2a";
+          g.beginPath();
+          g.arc(-r * 1.0, ly, r * 0.24, 0, Math.PI * 2);
+          g.fill();
+          g.fillStyle = "#c9782a";
+          g.beginPath();
+          g.arc(-r * 1.0, ly, r * 0.16, 0, Math.PI * 2);
+          g.fill();
+          g.fillStyle = "rgba(255,255,255,0.5)";
+          g.beginPath();
+          g.arc(-r * 1.05, ly - r * 0.06, r * 0.05, 0, Math.PI * 2);
           g.fill();
           continue;
         }

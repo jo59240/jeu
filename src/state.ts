@@ -408,9 +408,10 @@ export interface WorkerSave {
   unsupplied?: boolean; // sa maison est à sec (eau ou nourriture) et aucune source n'est disponible nulle part : il s'énerve
   thirstFull?: number; // secondes passées à 100 % de soif
   hungerFull?: number; // secondes passées à 100 % de faim
+  dish?: string; // la recette du plat qu'il porte (cuisinier)
   fedFor?: number; // secondes pendant lesquelles un bon repas le rassasie : il n'a pas faim
   shunned?: number[]; // maisons qu'il a quittées exaspéré : il n'y retourne pas tant que la gêne y reste forte
-  cargo?: "wood" | "plank" | "water" | "meat" | "cuts" | "honey" | "berries" | "tisane" | "syrup" | "body" | "milk" | FarmCrop; // ce qu'il porte : des bûches (par défaut), des planches ou de l'eau
+  cargo?: "wood" | "plank" | "water" | "meat" | "cuts" | "honey" | "berries" | "tisane" | "syrup" | "body" | "milk" | "meal" | FarmCrop; // ce qu'il porte : des bûches (par défaut), des planches ou de l'eau
 }
 
 export const FEMALE_NAMES = ["Léa", "Maëlle", "Nina", "Zoé", "Camille"]; // pour accorder les phrases
@@ -501,6 +502,7 @@ export interface Depot {
   planks?: number; // planches stockées
   cuts?: number; // viande préparée stockée (comptée à part des planches ; elles se partagent les places du dépôt)
   honey?: number; // pots de miel stockés (à part, mais dans les mêmes places)
+  dishes?: Record<string, number>; // plats préparés rangés ici (garde-manger) : ils comptent dans les places
   pantry?: boolean; // garde-manger : il range toute la nourriture (viande, baies, miel, lait, récoltes) ; le reste va dans les dépôts ordinaires
   level?: number; // 1 (défaut), 2 ou 3 : plus de places et un autre aspect
   meat?: number; // viande brute en réserve (rapportée des camps de chasseur, pour les bouchers)
@@ -656,6 +658,20 @@ export function consolidateFood(s: Save): boolean {
       }
     }
   }
+  for (const t of s.taverns) { // les plats rangés à la taverne vont aussi au cellier
+    for (const id of Object.keys(t.dishes)) {
+      let n = t.dishes[id] ?? 0;
+      for (const p of pantries) {
+        if (n <= 0) break;
+        const q = Math.min(n, depotFree(p));
+        if (q <= 0) continue;
+        t.dishes[id] -= q;
+        p.dishes = { ...(p.dishes ?? {}), [id]: (p.dishes?.[id] ?? 0) + q };
+        n -= q;
+        moved = true;
+      }
+    }
+  }
   for (const p of pantries) {
     for (const k of ["planks", "wood"] as const) {
       let n = p[k] ?? 0;
@@ -754,7 +770,8 @@ export function takeFromCamp(camp: Camp, max: number): number {
 
 export const depotLevel = (d: Depot) => Math.min(DEPOT_LEVELS.length, Math.max(1, d.level ?? 1));
 export const depotCapacity = (d: Depot) => DEPOT_LEVELS[depotLevel(d) - 1].cap * (d.pantry ? 2 : 1); // un garde-manger a deux fois la place d'un dépôt
-export const depotFree = (d: Depot) => Math.max(0, depotCapacity(d) - (d.planks ?? 0) - (d.cuts ?? 0) - (d.honey ?? 0) - (d.berries ?? 0) - (d.milk ?? 0) - (d.meat ?? 0) - cropTotal(d)); // un dépôt stocke des planches et de la viande préparée : ils se partagent ses places
+export const dishTotal = (d: Depot) => Object.values(d.dishes ?? {}).reduce((a, n) => a + n, 0);
+export const depotFree = (d: Depot) => Math.max(0, depotCapacity(d) - (d.planks ?? 0) - (d.cuts ?? 0) - (d.honey ?? 0) - (d.berries ?? 0) - (d.milk ?? 0) - (d.meat ?? 0) - cropTotal(d) - dishTotal(d)); // un dépôt stocke des planches et de la viande préparée : ils se partagent ses places
 export const storageCapacity = (s: Save) => s.depots.reduce((a, d) => a + depotCapacity(d), 0);
 export const woodStock = (s: Save) => s.depots.reduce((a, d) => a + d.wood, 0);
 export const storageFree = (s: Save) => s.depots.reduce((a, d) => a + depotFree(d), 0);
@@ -1811,6 +1828,9 @@ export function removeTavern(s: Save, m: Tavern) {
 }
 
 export const dishCount = (m: Tavern) => RECIPES.reduce((a, r) => a + (m.dishes[r.id] ?? 0), 0);
+// Les plats d'une recette au total : ceux de la taverne et ceux du garde-manger.
+export const dishesOf = (s: Save, id: string) => s.taverns.reduce((a, t) => a + (t.dishes[id] ?? 0), 0) + s.depots.reduce((a, d) => a + (d.dishes?.[id] ?? 0), 0);
+export const dishesAnywhere = (s: Save) => s.taverns.some((t) => dishCount(t) > 0) || s.depots.some((d) => dishTotal(d) > 0);
 
 // ---- Le grand drakkar ----
 

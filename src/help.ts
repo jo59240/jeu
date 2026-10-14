@@ -203,6 +203,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       cost("pantry"),
       "Le garde-manger **range toute la nourriture** du village : viande brute et préparée, baies, miel, lait, légumes et herbe. Il se pose et se relie par les chemins comme un dépôt.",
       "• Dès qu'il y en a un, **ce qui est stocké dans les dépôts y est transporté** (une fois par seconde, tant qu'il y a de la place), et le bois ou les planches qui y arriveraient vont dans un dépôt. Les dépôts gardent donc le **bois et les planches**.",
+      "• Les **plats préparés** à la taverne y sont aussi rangés : le cuisinier les y porte, et les villageois affamés ou fatigués viennent y manger.",
       "• Les villageois, la taverne, le port et le marché prennent la nourriture au garde-manger. On peut l'**améliorer** comme un dépôt pour plus de place.",
       "• L'**eau** reste dans les **puits**.",
     ],

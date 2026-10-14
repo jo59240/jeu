@@ -19,7 +19,7 @@ import { Zone, zoneBounds } from "./zone";
 import {
   Action, BuildResult, CAMP_CAPACITY, Camp, CREW_COLORS, FEMALE_NAMES, DEPOT_CAPACITY, Depot, MAX_CREW, ARRIVAL_SEC, addVillager, Pos, Save, addToDepot, campAt, campEntrance, depotEntrance, depotFree, depotCapacity, depotLevel, upgradeDepot, woodStock,
   clockHour, clockDay, darkness, seasonAt, tickDiscontent, DiscontentEvent, nuisanceLevel, houseMood, moodAt, nuisancePen, nuisanceSources, housesNear, NuisanceKey,
-  consolidateFood, placePantry, Tavern, tavernAt, tavernEntrance, placeTavern, removeTavern, canPlaceTavern, dishCount,
+  consolidateFood, placePantry, dishesOf, dishesAnywhere, dishTotal, Tavern, tavernAt, tavernEntrance, placeTavern, removeTavern, canPlaceTavern, dishCount,
   Shipyard, shipyardAt, shipyardEntrance, shipyardRot, shipyardSpot, placeShipyard, removeShipyard, canPlaceShipyard, shipyardNeeds, deliverToShipyard, shipyardDone, sail, goals,
   Market, marketAt, marketEntrance, placeMarket, removeMarket, canPlaceMarket, tickMarkets, arriveCaravan, buyFromCaravan, sellToCaravan, depotGoodTotal, marketBuyPrice, marketSellPrice,
   Pigpen, pigpenAt, pigpenEntrance, placePigpen, removePigpen, canPlacePigpen, buyPig, slaughterPig, tickPigpens, pigpenSlaughterCell, pigpenTroughCell, pigAdult, pigFed, pigWatered, adultsOf,
@@ -1542,11 +1542,16 @@ export class Game {
     const t = s.taverns.find((k) => k.id === tavernId);
     if (!t) return null;
     const door = tavernEntrance(t);
+    if (w.data.carry > 0 && w.data.cargo === "meal") {
+      // le plat préparé va au garde-manger (le plus proche qui a de la place), sinon il reste à la taverne
+      const p = [...s.depots].filter((d) => d.pantry && depotFree(d) > 0).sort((a, b) => Math.hypot(depotEntrance(a).gx - from.gx, depotEntrance(a).gy - from.gy) - Math.hypot(depotEntrance(b).gx - from.gx, depotEntrance(b).gy - from.gy))[0];
+      return p ? { type: "store", target: depotEntrance(p), depotId: p.id } : { type: "stock", target: door };
+    }
     if (w.data.carry > 0) return { type: "stock", target: door };
     const have = (g: keyof typeof t.pantry) => t.pantry[g] ?? 0;
     const inDepots = (g: keyof typeof t.pantry) => s.depots.reduce((a, d) => a + (goodsOf("depot", d)[g] ?? 0), 0);
     // la recette la moins en stock dont on a (ou peut réunir) tous les ingrédients
-    const options = RECIPES.filter((r) => (t.dishes[r.id] ?? 0) < DISH_CAP && (Object.entries(r.needs) as [keyof typeof t.pantry, number][]).every(([g, n]) => have(g) + inDepots(g) >= n)).sort((a, b) => (t.dishes[a.id] ?? 0) - (t.dishes[b.id] ?? 0));
+    const options = RECIPES.filter((r) => dishesOf(s, r.id) < DISH_CAP && (Object.entries(r.needs) as [keyof typeof t.pantry, number][]).every(([g, n]) => have(g) + inDepots(g) >= n)).sort((a, b) => dishesOf(s, a.id) - dishesOf(s, b.id));
     const r = options[0];
     if (!r) return null;
     for (const [g, n] of Object.entries(r.needs) as [keyof typeof t.pantry, number][]) {
@@ -1574,17 +1579,39 @@ export class Game {
         w.data.carry = n;
         this.floatText(pop.x, pop.y, `+${n} ${EXPORT_GOODS[plan.good].emoji}`);
       }
-    } else if (plan.type === "stock") {
-      const g = w.data.cargo as keyof typeof t.pantry | undefined;
-      if (g) t.pantry[g] = Math.min(PANTRY_CAP, (t.pantry[g] ?? 0) + w.data.carry);
+    } else if (plan.type === "store") {
+      const d = s.depots.find((k) => k.id === plan.depotId);
+      const id = w.data.dish;
+      if (d && id && depotFree(d) > 0) {
+        d.dishes = { ...(d.dishes ?? {}), [id]: (d.dishes?.[id] ?? 0) + 1 };
+        const rr = RECIPES.find((k) => k.id === id);
+        this.floatText(pop.x, pop.y, `+1 ${rr?.emoji ?? "🍲"} au cellier`);
+      } else if (id) t.dishes[id] = (t.dishes[id] ?? 0) + 1; // plus de place : le plat reste à la taverne
       w.data.carry = 0;
       w.data.cargo = undefined;
+      w.data.dish = undefined;
+    } else if (plan.type === "stock") {
+      if (w.data.cargo === "meal" && w.data.dish) {
+        t.dishes[w.data.dish] = (t.dishes[w.data.dish] ?? 0) + 1; // pas de garde-manger : le plat reste à la taverne
+        w.data.dish = undefined;
+        w.data.carry = 0;
+        w.data.cargo = undefined;
+      } else {
+        const g = w.data.cargo as keyof typeof t.pantry | undefined;
+        if (g) t.pantry[g] = Math.min(PANTRY_CAP, (t.pantry[g] ?? 0) + w.data.carry);
+        w.data.carry = 0;
+        w.data.cargo = undefined;
+      }
     } else {
       const r = RECIPES.find((k) => k.id === plan.recipe);
       if (r && (Object.entries(r.needs) as [keyof typeof t.pantry, number][]).every(([g, n]) => (t.pantry[g] ?? 0) >= n)) {
         for (const [g, n] of Object.entries(r.needs) as [keyof typeof t.pantry, number][]) t.pantry[g] = (t.pantry[g] ?? 0) - n;
-        t.dishes[r.id] = (t.dishes[r.id] ?? 0) + 1;
         job.cooked += 1;
+        if (s.depots.some((d) => d.pantry)) {
+          w.data.cargo = "meal"; // il porte le plat au garde-manger
+          w.data.carry = 1;
+          w.data.dish = r.id;
+        } else t.dishes[r.id] = (t.dishes[r.id] ?? 0) + 1;
         this.floatText(pop.x, pop.y, `+1 ${r.emoji} ${r.label}`);
       }
     }
@@ -1602,7 +1629,8 @@ export class Game {
       const hungry = (w.data.hunger ?? 0) >= DINE_HUNGER && (w.data.fedFor ?? 0) <= 0;
       const tired = w.energy <= DINE_ENERGY;
       if (!hungry && !tired) continue;
-      const t = [...s.taverns].filter((k) => dishCount(k) > 0).sort((a, b) => Math.hypot(tavernEntrance(a).gx - w.cell.gx, tavernEntrance(a).gy - w.cell.gy) - Math.hypot(tavernEntrance(b).gx - w.cell.gx, tavernEntrance(b).gy - w.cell.gy))[0];
+      if (!dishesAnywhere(s)) return;
+    const t = [...s.taverns].sort((a, b) => Math.hypot(tavernEntrance(a).gx - w.cell.gx, tavernEntrance(a).gy - w.cell.gy) - Math.hypot(tavernEntrance(b).gx - w.cell.gx, tavernEntrance(b).gy - w.cell.gy))[0];
       if (!t) continue;
       this.dineCool.set(w.data.id, now + DINE_COOLDOWN);
       w.startDine(t.id, this.env);
@@ -1610,17 +1638,20 @@ export class Game {
   }
 
   // Il mange un plat : celui qui convient le mieux (le plus énergétique s'il est fatigué, le plus rassasiant s'il a faim).
-  private dineDo(_plan: DinePlan, w: Worker) {
+  private dineDo(plan: DinePlan, w: Worker) {
     const s = this.save;
     const job = w.data.job;
     if (!job || job.type !== "water" || job.dine === undefined) return;
     const t = s.taverns.find((k) => k.id === job.dine);
     if (!t) return;
-    const menu = RECIPES.filter((r) => (t.dishes[r.id] ?? 0) > 0);
+    const store = plan.depotId !== undefined ? s.depots.find((k) => k.id === plan.depotId) : undefined; // le garde-manger où il mange, sinon la taverne
+    const have = (id: string) => (store ? store.dishes?.[id] ?? 0 : t.dishes[id] ?? 0);
+    const menu = RECIPES.filter((r) => have(r.id) > 0);
     if (!menu.length) return;
     const wantEnergy = 100 - w.energy >= (w.data.hunger ?? 0);
     const dish = [...menu].sort((a, b) => (wantEnergy ? b.energy - a.energy : b.sated - a.sated))[0];
-    t.dishes[dish.id] -= 1;
+    if (store) store.dishes = { ...(store.dishes ?? {}), [dish.id]: have(dish.id) - 1 };
+    else t.dishes[dish.id] -= 1;
     w.data.energy = Math.min(100, w.energy + dish.energy);
     w.data.hunger = 0;
     w.data.fedFor = dish.sated;
@@ -2673,9 +2704,13 @@ export class Game {
       tavernInfo: (id) => this.save.taverns.some((k) => k.id === id),
       tavernPlan: (id, from, w) => this.tavernPlan(id, from, w),
       tavernDo: (plan, w) => this.tavernDo(plan, w),
-      dinePlan: (id, _from, _w) => {
+      dinePlan: (id, from, _w) => {
         const t = this.save.taverns.find((k) => k.id === id);
-        return t && dishCount(t) > 0 ? { type: "eat", target: tavernEntrance(t) } : null;
+        if (!t) return null;
+        // les plats sont au garde-manger : on y va manger ; sinon à la taverne
+        const p = [...this.save.depots].filter((d) => dishTotal(d) > 0).sort((a, b) => Math.hypot(depotEntrance(a).gx - from.gx, depotEntrance(a).gy - from.gy) - Math.hypot(depotEntrance(b).gx - from.gx, depotEntrance(b).gy - from.gy))[0];
+        if (p) return { type: "eat", target: depotEntrance(p), depotId: p.id };
+        return dishCount(t) > 0 ? { type: "eat", target: tavernEntrance(t) } : null;
       },
       dineDo: (plan, w) => this.dineDo(plan, w),
       pigInfo: (id) => this.save.pigpens.some((k) => k.id === id),
@@ -4019,7 +4054,7 @@ export class Game {
     const crew = this.workers.map((w) => w.name + w.role + (w.working ? 1 : 0)).join(",");
     const net = `${Object.keys(this.save.roads).length}/${this.save.camps.length}/${this.save.depots.length}/${this.save.houses.length}`;
     const sickKey = this.workers.filter((w) => w.data.illness).map((w) => w.data.id + w.data.illness!.kind + Math.round(w.data.illness!.sev / 5)).join(",");
-    const sig = tavern ? `t${tavern.id}/${RECIPES.map((r) => tavern.dishes[r.id] ?? 0).join("-")}/${Object.values(tavern.pantry).join("-")}/${net}/${crew}` : ship ? `y${ship.id}/${ship.stage}/${Object.values(ship.have).join("-")}/${this.save.depots.reduce((a, d) => a + (d.planks ?? 0) + (d.cuts ?? 0) + (d.honey ?? 0) + (d.berries ?? 0) + d.wood + cropTotal(d), 0)}/${net}` : market ? `k${market.id}/${market.here ? 1 : 0}/${Math.floor(market.clock / 30)}/${Object.values(market.stock).join("-")}/${Object.values(market.wants).join("-")}/${Math.floor(market.purse)}/${this.save.coins}/${this.save.depots.reduce((a, d) => a + depotFree(d), 0)}/${net}` : pigpen ? `g${pigpen.id}/${pigpen.pigs.map((p) => (pigAdult(p) ? 2 : 0) + (pigFed(p) ? 1 : 0) + (pigWatered(p) ? 1 : 0)).join("")}/${Math.floor(pigpen.feed)}/${Math.floor(pigpen.water)}/${pigpen.order}/${pigpen.auto ? 1 : 0}/${this.save.coins >= PIG_PRICE ? 1 : 0}/${net}/${crew}` : stable ? `v${stable.id}/${stable.cows.map((c) => (cowFed(c) ? 1 : 0) + (cowWatered(c) ? 1 : 0)).join("")}/${Math.floor(stable.feed)}/${Math.floor(stable.water)}/${stable.milk}/${net}/${crew}` : farm ? `f${farm.id}/${farm.crop}/${Math.floor(farm.water)}/${farm.plots.map((pl) => (pl.p < 0 ? "e" : pl.p >= 1 ? "r" : Math.floor(pl.p * 25)) + (pl.wet <= 0 ? "d" : "") + (pl.t ?? "-")[0]).join(",")}/${this.farmPick ?? "-"}/${this.season().index}/${net}/${crew}` : church ? `e${church.id}/${church.graves.length}/${this.save.corpses.length}/${net}/${crew}` : clinic ? `n${clinic.id}/${clinic.prevent === false ? 0 : 1}/${this.workers.map((w) => healSkill(w.data.xp ?? 0).level).join("")}/${clinic.berries}/${clinic.honey}/${clinic.tisane}/${clinic.syrup}/${sickKey}/${net}/${crew}` : apiary ? `a${apiary.id}/${apiary.honey}/${Math.floor(apiary.care / 5)}/${this.season().index}/${net}/${crew}` : port ? `p${port.id}/${EXPORT_LIST.map((g) => portStock(port, g) + ":" + portQuota(port, g)).join(",")}/${this.save.depots.reduce((a, d) => a + (d.planks ?? 0) + (d.cuts ?? 0) + (d.honey ?? 0) + (d.berries ?? 0) + cropTotal(d), 0) + this.save.camps.reduce((a, c) => a + c.wood, 0) + this.save.lodges.reduce((a, l) => a + l.meat, 0)}/${Math.floor(port.t / 4)}/${net}/${crew}` : shop ? `b${shop.id}/${shop.meat}/${shop.cuts}/${net}/${crew}` : lodge ? `l${lodge.id}/${lodge.meat}/${crew}/${Math.floor(this.animals.length / 5)}` : well ? `w${well.id}/${well.water}/${net}/${crew}` : mill ? `m${mill.id}/${mill.logs}/${mill.planks}/${net}/${crew}` : house ? `h${house.id}/${house.quarantine ? 1 : 0}/${sickKey}/${house.water ?? 0}/${house.food ?? 0}/${houseMood(this.save, house).mood}/${Math.round(Math.max(0, ...this.workers.filter((w) => w.data.home === house.id).map((w) => w.data.discontent ?? 0)) / 4)}/${this.workers.filter((w) => w.data.home === house.id && w.data.threat !== undefined).length}/${Math.floor(Math.max(0, ...this.workers.filter((w) => w.data.threat !== undefined).map((w) => w.data.threat ?? 0)) / 5)}/${crew}/${this.workers.map((w) => (w.inside ? 1 : 0) + "" + w.data.home).join("")}` : camp ? `c${camp.id}/${camp.wood}/${net}` : site ? `s${site.id}/${site.have}/${Math.floor(site.progress * 20)}/${net}/${crew}` : `d${depot!.id}/${depot!.wood}/${depot!.planks ?? 0}/${depot!.cuts ?? 0}/${depot!.honey ?? 0}/${depot!.berries ?? 0}/${depot!.milk ?? 0}/${depot!.meat ?? 0}/${Object.values(depot!.crops ?? {}).join("-")}/${depot!.level ?? 1}/${net}/${crew}`;
+    const sig = tavern ? `t${tavern.id}/${RECIPES.map((r) => dishesOf(this.save, r.id)).join("-")}/${Object.values(tavern.pantry).join("-")}/${net}/${crew}` : ship ? `y${ship.id}/${ship.stage}/${Object.values(ship.have).join("-")}/${this.save.depots.reduce((a, d) => a + (d.planks ?? 0) + (d.cuts ?? 0) + (d.honey ?? 0) + (d.berries ?? 0) + d.wood + cropTotal(d), 0)}/${net}` : market ? `k${market.id}/${market.here ? 1 : 0}/${Math.floor(market.clock / 30)}/${Object.values(market.stock).join("-")}/${Object.values(market.wants).join("-")}/${Math.floor(market.purse)}/${this.save.coins}/${this.save.depots.reduce((a, d) => a + depotFree(d), 0)}/${net}` : pigpen ? `g${pigpen.id}/${pigpen.pigs.map((p) => (pigAdult(p) ? 2 : 0) + (pigFed(p) ? 1 : 0) + (pigWatered(p) ? 1 : 0)).join("")}/${Math.floor(pigpen.feed)}/${Math.floor(pigpen.water)}/${pigpen.order}/${pigpen.auto ? 1 : 0}/${this.save.coins >= PIG_PRICE ? 1 : 0}/${net}/${crew}` : stable ? `v${stable.id}/${stable.cows.map((c) => (cowFed(c) ? 1 : 0) + (cowWatered(c) ? 1 : 0)).join("")}/${Math.floor(stable.feed)}/${Math.floor(stable.water)}/${stable.milk}/${net}/${crew}` : farm ? `f${farm.id}/${farm.crop}/${Math.floor(farm.water)}/${farm.plots.map((pl) => (pl.p < 0 ? "e" : pl.p >= 1 ? "r" : Math.floor(pl.p * 25)) + (pl.wet <= 0 ? "d" : "") + (pl.t ?? "-")[0]).join(",")}/${this.farmPick ?? "-"}/${this.season().index}/${net}/${crew}` : church ? `e${church.id}/${church.graves.length}/${this.save.corpses.length}/${net}/${crew}` : clinic ? `n${clinic.id}/${clinic.prevent === false ? 0 : 1}/${this.workers.map((w) => healSkill(w.data.xp ?? 0).level).join("")}/${clinic.berries}/${clinic.honey}/${clinic.tisane}/${clinic.syrup}/${sickKey}/${net}/${crew}` : apiary ? `a${apiary.id}/${apiary.honey}/${Math.floor(apiary.care / 5)}/${this.season().index}/${net}/${crew}` : port ? `p${port.id}/${EXPORT_LIST.map((g) => portStock(port, g) + ":" + portQuota(port, g)).join(",")}/${this.save.depots.reduce((a, d) => a + (d.planks ?? 0) + (d.cuts ?? 0) + (d.honey ?? 0) + (d.berries ?? 0) + cropTotal(d), 0) + this.save.camps.reduce((a, c) => a + c.wood, 0) + this.save.lodges.reduce((a, l) => a + l.meat, 0)}/${Math.floor(port.t / 4)}/${net}/${crew}` : shop ? `b${shop.id}/${shop.meat}/${shop.cuts}/${net}/${crew}` : lodge ? `l${lodge.id}/${lodge.meat}/${crew}/${Math.floor(this.animals.length / 5)}` : well ? `w${well.id}/${well.water}/${net}/${crew}` : mill ? `m${mill.id}/${mill.logs}/${mill.planks}/${net}/${crew}` : house ? `h${house.id}/${house.quarantine ? 1 : 0}/${sickKey}/${house.water ?? 0}/${house.food ?? 0}/${houseMood(this.save, house).mood}/${Math.round(Math.max(0, ...this.workers.filter((w) => w.data.home === house.id).map((w) => w.data.discontent ?? 0)) / 4)}/${this.workers.filter((w) => w.data.home === house.id && w.data.threat !== undefined).length}/${Math.floor(Math.max(0, ...this.workers.filter((w) => w.data.threat !== undefined).map((w) => w.data.threat ?? 0)) / 5)}/${crew}/${this.workers.map((w) => (w.inside ? 1 : 0) + "" + w.data.home).join("")}` : camp ? `c${camp.id}/${camp.wood}/${net}` : site ? `s${site.id}/${site.have}/${Math.floor(site.progress * 20)}/${net}/${crew}` : `d${depot!.id}/${depot!.wood}/${depot!.planks ?? 0}/${depot!.cuts ?? 0}/${depot!.honey ?? 0}/${depot!.berries ?? 0}/${depot!.milk ?? 0}/${depot!.meat ?? 0}/${Object.values(depot!.crops ?? {}).join("-")}/${depot!.level ?? 1}/${Object.values(depot!.dishes ?? {}).join("-")}/${net}/${crew}`;
     const crewAt: [string, number] | null = tavern ? ["tavern", tavern.id] : pigpen ? ["pigpen", pigpen.id] : stable ? ["stable", stable.id] : farm ? ["farm", farm.id] : church ? ["church", church.id] : clinic ? ["clinic", clinic.id] : apiary ? ["apiary", apiary.id] : port ? ["port", port.id] : shop ? ["butcher", shop.id] : lodge ? ["lodge", lodge.id] : well ? ["well", well.id] : mill ? ["sawmill", mill.id] : site ? ["site", site.id] : camp ? ["camp", camp.id] : depot ? ["depot", depot.id] : null;
     const work = crewAt && crewAt[0] !== "well" ? `${this.employeesAt(crewAt[0] as WorkplaceKind, crewAt[1]).map((w) => w.data.id).join(",")}${crewAt[0] === "depot" ? "+" + this.employeesAt("gather", crewAt[1]).map((w) => w.data.id).join(",") : ""}|${this.recruitOpen ? this.workers.filter((o) => !o.data.workplace).map((o) => o.data.id).join(",") : "-"}` : "";
     const full = sig + "/" + work + "/" + ((tavern ?? ship ?? market ?? pigpen ?? stable ?? farm ?? church ?? clinic ?? apiary ?? port ?? shop ?? lodge ?? well ?? mill ?? house ?? camp ?? site ?? depot)?.rot ?? 0);
@@ -4071,14 +4106,22 @@ export class Game {
         if (gauge) bar(gauge[0], gauge[1]);
       };
       const hasRoad = (e: Pos) => roadAt(this.save, e.gx, e.gy);
-      const linkChip = (label: string, e: Pos, targets: Pos[]): Chip => (hasRoad(e) && targets.some((t) => this.linkedTo(e, [t])) ? [`Relié · ${label}`, "ok"] : [`Non relié · ${label}`, "bad"]);
+      // l'état de la liaison, dit précisément : pas de chemin à l'entrée, rien à relier, les autres bâtiments sans chemin, ou un chemin qui ne les rejoint pas
+      const linkChip = (label: string, e: Pos, targets: Pos[]): Chip => {
+        if (!hasRoad(e)) return ["Pas de chemin à l'entrée", "bad"];
+        if (!targets.length) return [`Pas de ${label} à relier`, "idle"];
+        const withRoad = targets.filter((t) => hasRoad(t));
+        if (!withRoad.length) return [`Les ${label} n'ont pas de chemin à leur entrée`, "bad"];
+        const n = withRoad.filter((t) => this.linkedTo(e, [t])).length;
+        return n ? [`Relié · ${label} (${n}/${targets.length})`, "ok"] : [`Le chemin n'atteint aucun des ${label}`, "bad"];
+      };
       const folksOf = (pred: (w: Worker) => boolean) => this.workers.filter(pred).length;
 
       if (tavern) {
-        const total = dishCount(tavern);
+        const total = RECIPES.reduce((a, r) => a + dishesOf(this.save, r.id), 0);
         head("🍺", "Taverne", [[`${total} plat${total > 1 ? "s" : ""} prêt${total > 1 ? "s" : ""}`, total ? "ok" : "idle"], this.employeesAt("tavern", tavern.id).length ? ["Cuisinier au travail", "ok"] : ["Pas de cuisinier", "bad"]]);
         for (const r of RECIPES) {
-          const n = tavern.dishes[r.id] ?? 0;
+          const n = dishesOf(this.save, r.id);
           stat(`${r.emoji} ${r.label}`, `${n} / ${DISH_CAP}`, [n, DISH_CAP]);
           const needs = (Object.entries(r.needs) as [keyof typeof EXPORT_GOODS, number][]).map(([g, q]) => `${q} ${EXPORT_GOODS[g].emoji}`).join(" + ");
           box.appendChild(div("menuRow tiny", `${needs} · ⚡ +${r.energy} énergie · rassasie ${Math.round(r.sated / 60)} min`));
@@ -4459,6 +4502,7 @@ export class Game {
         head("🏭", "Scierie", [
           this.staffAt("sawmill", mill.id) === 0 ? ["Sans ouvrier", "bad"] : sawmillWorking(mill) ? ["En marche", "ok"] : mill.planks >= SAWMILL_PLANKS_CAP ? ["Stock plein", "bad"] : ["En attente", "idle"],
           linkChip("camps", e, this.save.camps.map(campEntrance)),
+          linkChip("dépôts", e, this.save.depots.map(depotEntrance)),
         ]);
         stat("🪵 Bûches", `${mill.logs} / ${SAWMILL_LOGS_CAP}`, [mill.logs, SAWMILL_LOGS_CAP]);
         stat("😠 Maisons gênées", String(housesNear(this.save, mill.gx + 1.5, mill.gy + 1.5, MOOD.nuisance.sawmill.radius).length));
@@ -4551,6 +4595,7 @@ export class Game {
         stat("🫐 Baies", String(depot.berries ?? 0));
         if ((depot.milk ?? 0) > 0 || depot.pantry) stat("🥛 Lait", String(depot.milk ?? 0));
         stat("🍖 Viande brute", String(depot.meat ?? 0));
+        for (const r of RECIPES) if ((depot.dishes?.[r.id] ?? 0) > 0) stat(`${r.emoji} ${r.label}`, String(depot.dishes?.[r.id]));
         for (const id of Object.keys(FARM_CROPS) as FarmCrop[]) if ((depot.crops?.[id] ?? 0) > 0) stat(`${FARM_CROPS[id].emoji} ${FARM_CROPS[id].label}`, String(depot.crops?.[id]));
       }
       // les employés de ce bâtiment : on les voit, on peut les virer, et recruter parmi les villageois sans emploi
